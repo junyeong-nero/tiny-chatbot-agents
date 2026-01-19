@@ -42,6 +42,7 @@ class ToSCrawler(BaseCrawler):
     async def crawl(self) -> list[dict[str, Any]]:
         playwright, browser, context, page = await self._create_browser_context()
         all_tos_items = []
+        all_list_items = []
 
         try:
             await page.goto(BASE_URL)
@@ -50,21 +51,30 @@ class ToSCrawler(BaseCrawler):
             total_pages = await self._get_total_pages(page)
             self.logger.info(f"Total pages: {total_pages}")
 
+            # Phase 1: Collect all items from all pages
             for page_num in range(1, total_pages + 1):
                 if page_num > 1:
+                    # Navigate back to list page first
+                    await page.goto(BASE_URL)
+                    await self._wait_for_page_load(page)
                     await self._navigate_to_page(page, page_num)
 
                 page_items = await self._extract_tos_list(page, page_num)
                 self.logger.info(f"Page {page_num}: found {len(page_items)} items")
+                all_list_items.extend(page_items)
 
-                for item in page_items:
-                    detail = await self._extract_tos_detail(page, item)
-                    if detail:
-                        all_tos_items.append(detail)
+                await asyncio.sleep(0.5)
 
-                    await asyncio.sleep(0.5)
+            self.logger.info(f"Total list items collected: {len(all_list_items)}")
 
-                await asyncio.sleep(1)
+            # Phase 2: Visit each detail page
+            for idx, item in enumerate(all_list_items):
+                self.logger.info(f"Processing item {idx + 1}/{len(all_list_items)}: {item['title']}")
+                detail = await self._extract_tos_detail(page, item)
+                if detail:
+                    all_tos_items.append(detail)
+
+                await asyncio.sleep(0.5)
 
         finally:
             await self._close_browser(playwright, browser, context)
@@ -72,9 +82,8 @@ class ToSCrawler(BaseCrawler):
         return all_tos_items
 
     async def _get_total_pages(self, page: Page) -> int:
-        pagination_links = await page.query_selector_all(
-            "div.paginate a[href*='javascript:void(0)']"
-        )
+        # Use .pager a selector for pagination
+        pagination_links = await page.query_selector_all(".pager a")
 
         max_page = 1
         for link in pagination_links:
@@ -82,19 +91,30 @@ class ToSCrawler(BaseCrawler):
             if text and text.strip().isdigit():
                 max_page = max(max_page, int(text.strip()))
 
-        last_btn = await page.query_selector("a.btn_last")
-        if last_btn:
-            onclick = await last_btn.get_attribute("onclick")
-            if onclick:
-                match = re.search(r"goPage\((\d+)\)", onclick)
+            # Also check href for goPage calls
+            href = await link.get_attribute("href")
+            if href:
+                match = re.search(r"goPage\((\d+)\)", href)
                 if match:
                     max_page = max(max_page, int(match.group(1)))
 
         return max_page
 
     async def _navigate_to_page(self, page: Page, page_num: int) -> None:
-        await page.evaluate(f"goPage({page_num})")
-        await self._wait_for_page_load(page)
+        # Click on the page number link in the pager
+        page_link = await page.query_selector(f".pager a:has-text('{page_num}')")
+        if page_link:
+            await page_link.click()
+            await self._wait_for_page_load(page)
+        else:
+            # Fallback: try to find link with goPage in onclick
+            links = await page.query_selector_all(".pager a")
+            for link in links:
+                onclick = await link.get_attribute("onclick")
+                if onclick and f"goPage('{page_num}')" in onclick:
+                    await link.click()
+                    await self._wait_for_page_load(page)
+                    break
 
     async def _extract_tos_list(
         self,
@@ -103,7 +123,8 @@ class ToSCrawler(BaseCrawler):
     ) -> list[dict[str, Any]]:
         items = []
 
-        rows = await page.query_selector_all("table tbody tr")
+        # Use .tableDefault table for the ToS table
+        rows = await page.query_selector_all(".tableDefault table tbody tr")
 
         for row_idx, row in enumerate(rows, 1):
             try:
@@ -124,8 +145,10 @@ class ToSCrawler(BaseCrawler):
                 title = await title_link.text_content()
                 title = title.strip() if title else ""
 
+                # Check both onclick and href for doView params
                 onclick = await title_link.get_attribute("onclick")
-                num, row_num = self._parse_doview_params(onclick)
+                href = await title_link.get_attribute("href")
+                num, row_num = self._parse_doview_params(onclick or href)
 
                 pdf_url = None
                 if len(cells) > 2:
