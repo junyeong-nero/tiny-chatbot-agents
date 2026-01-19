@@ -17,6 +17,14 @@ models:
     normalize: true
     description: "Good balance of quality and speed"
 
+  qwen3-embedding-8b:
+    name: Qwen/Qwen3-Embedding-8B
+    type: standard
+    dimension: 4096
+    max_seq_length: 32768
+    normalize: true
+    description: "Best quality for Korean, long context (32K), slower"
+
   bge-m3:
     name: BAAI/bge-m3
     type: standard
