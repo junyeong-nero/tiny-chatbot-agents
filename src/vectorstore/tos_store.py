@@ -1,0 +1,391 @@
+import hashlib
+import json
+import logging
+import re
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import chromadb
+from chromadb.config import Settings
+
+from .embeddings import E5EmbeddingFunction
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToSSearchResult:
+    section_title: str
+    section_content: str
+    document_title: str
+    category: str
+    parent_content: str
+    effective_date: str
+    source_url: str
+    score: float
+    id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "section_title": self.section_title,
+            "section_content": self.section_content,
+            "document_title": self.document_title,
+            "category": self.category,
+            "parent_content": self.parent_content,
+            "effective_date": self.effective_date,
+            "source_url": self.source_url,
+            "score": self.score,
+            "id": self.id,
+        }
+
+
+class ToSChunker:
+    SECTION_PATTERN = re.compile(r"^제\s*(\d+)\s*조\s*[\(（]([^)）]+)[\)）]")
+    SUBSECTION_PATTERN = re.compile(r"^[①②③④⑤⑥⑦⑧⑨⑩]|^\d+\.|^[가나다라마바사][\.\)]")
+
+    def __init__(self, include_parent_context: bool = True, max_chunk_length: int = 2000):
+        self.include_parent_context = include_parent_context
+        self.max_chunk_length = max_chunk_length
+
+    def chunk_document(self, tos_item: dict[str, Any]) -> list[dict[str, Any]]:
+        chunks = []
+        document_title = tos_item.get("title", "")
+        category = tos_item.get("category", "")
+        effective_date = tos_item.get("effective_date", "")
+        source_url = tos_item.get("source_url", "")
+        crawled_at = tos_item.get("crawled_at", datetime.now().isoformat())
+
+        sections = tos_item.get("sections", [])
+        if sections:
+            for section in sections:
+                chunk = self._create_section_chunk(
+                    section=section,
+                    document_title=document_title,
+                    category=category,
+                    effective_date=effective_date,
+                    source_url=source_url,
+                    crawled_at=crawled_at,
+                    full_content=tos_item.get("content", ""),
+                )
+                if chunk:
+                    chunks.append(chunk)
+
+        if not chunks:
+            content = tos_item.get("content", "")
+            if content:
+                parsed_sections = self._parse_sections_from_content(content)
+                for section in parsed_sections:
+                    chunk = self._create_section_chunk(
+                        section=section,
+                        document_title=document_title,
+                        category=category,
+                        effective_date=effective_date,
+                        source_url=source_url,
+                        crawled_at=crawled_at,
+                        full_content=content,
+                    )
+                    if chunk:
+                        chunks.append(chunk)
+
+        if not chunks and tos_item.get("content"):
+            chunks.append({
+                "section_title": document_title,
+                "section_content": tos_item["content"][:self.max_chunk_length],
+                "document_title": document_title,
+                "category": category,
+                "parent_content": "",
+                "effective_date": effective_date,
+                "source_url": source_url,
+                "crawled_at": crawled_at,
+            })
+
+        return chunks
+
+    def _create_section_chunk(
+        self,
+        section: dict[str, str],
+        document_title: str,
+        category: str,
+        effective_date: str,
+        source_url: str,
+        crawled_at: str,
+        full_content: str,
+    ) -> dict[str, Any] | None:
+        title = section.get("title", "").strip()
+        content = section.get("content", "").strip()
+
+        if not title and not content:
+            return None
+
+        combined = f"{title}\n{content}" if content else title
+        if len(combined) < 10:
+            return None
+
+        parent_content = ""
+        if self.include_parent_context and full_content:
+            parent_content = self._get_parent_context(title, full_content)
+
+        return {
+            "section_title": title,
+            "section_content": content[:self.max_chunk_length],
+            "document_title": document_title,
+            "category": category,
+            "parent_content": parent_content[:500],
+            "effective_date": effective_date,
+            "source_url": source_url,
+            "crawled_at": crawled_at,
+        }
+
+    def _parse_sections_from_content(self, content: str) -> list[dict[str, str]]:
+        sections = []
+        lines = content.split("\n")
+
+        current_section = None
+        current_content = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            match = self.SECTION_PATTERN.match(line)
+            if match:
+                if current_section:
+                    sections.append({
+                        "title": current_section,
+                        "content": "\n".join(current_content),
+                    })
+
+                current_section = line
+                current_content = []
+            elif current_section:
+                current_content.append(line)
+
+        if current_section:
+            sections.append({
+                "title": current_section,
+                "content": "\n".join(current_content),
+            })
+
+        return sections
+
+    def _get_parent_context(self, section_title: str, full_content: str) -> str:
+        match = self.SECTION_PATTERN.match(section_title)
+        if not match:
+            return ""
+
+        section_num = int(match.group(1))
+        if section_num <= 1:
+            return ""
+
+        prev_section_pattern = rf"제\s*{section_num - 1}\s*조\s*[\(（][^)）]+[\)）]"
+        prev_match = re.search(prev_section_pattern, full_content)
+        if prev_match:
+            start = prev_match.start()
+            end = min(start + 500, len(full_content))
+            return full_content[start:end]
+
+        return ""
+
+
+class ToSVectorStore:
+    COLLECTION_NAME = "tos"
+
+    def __init__(
+        self,
+        persist_directory: str | Path = "data/vectordb/tos",
+        embedding_model: str | None = None,
+        device: str | None = None,
+    ) -> None:
+        self.persist_directory = Path(persist_directory)
+        self.persist_directory.mkdir(parents=True, exist_ok=True)
+
+        self.embedding_fn = E5EmbeddingFunction(
+            model_name=embedding_model,
+            device=device,
+        )
+
+        self.client = chromadb.PersistentClient(
+            path=str(self.persist_directory),
+            settings=Settings(anonymized_telemetry=False),
+        )
+
+        self.collection = self.client.get_or_create_collection(
+            name=self.COLLECTION_NAME,
+            embedding_function=self.embedding_fn,  # type: ignore[arg-type]
+            metadata={"hnsw:space": "cosine"},
+        )
+
+        self.chunker = ToSChunker()
+
+        logger.info(
+            f"ToS Vector Store initialized. Collection '{self.COLLECTION_NAME}' "
+            f"has {self.collection.count()} documents."
+        )
+
+    def add_tos_document(self, tos_item: dict[str, Any]) -> list[str]:
+        chunks = self.chunker.chunk_document(tos_item)
+        return self._add_chunks(chunks)
+
+    def add_tos_batch(
+        self,
+        tos_items: list[dict[str, Any]],
+        batch_size: int = 50,
+    ) -> list[str]:
+        all_chunks = []
+        for item in tos_items:
+            chunks = self.chunker.chunk_document(item)
+            all_chunks.extend(chunks)
+
+        logger.info(f"Total chunks to add: {len(all_chunks)}")
+        return self._add_chunks(all_chunks, batch_size)
+
+    def _add_chunks(
+        self,
+        chunks: list[dict[str, Any]],
+        batch_size: int = 50,
+    ) -> list[str]:
+        all_ids = []
+
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+
+            ids = []
+            documents = []
+            metadatas = []
+
+            for chunk in batch:
+                section_title = chunk.get("section_title", "")
+                section_content = chunk.get("section_content", "")
+
+                embed_text = f"{section_title}\n{section_content}".strip()
+                if not embed_text:
+                    continue
+
+                chunk_id = hashlib.md5(
+                    f"{chunk['document_title']}_{section_title}_{chunk['crawled_at']}".encode()
+                ).hexdigest()[:12]
+
+                ids.append(chunk_id)
+                documents.append(embed_text)
+                metadatas.append({
+                    "section_title": section_title,
+                    "section_content": section_content[:1000],
+                    "document_title": chunk.get("document_title", ""),
+                    "category": chunk.get("category", ""),
+                    "parent_content": chunk.get("parent_content", ""),
+                    "effective_date": chunk.get("effective_date", ""),
+                    "source_url": chunk.get("source_url", ""),
+                    "crawled_at": chunk.get("crawled_at", ""),
+                })
+
+            if ids:
+                self.collection.add(
+                    ids=ids,
+                    documents=documents,
+                    metadatas=metadatas,
+                )
+                all_ids.extend(ids)
+
+            logger.info(f"Added batch {i // batch_size + 1}: {len(ids)} chunks")
+
+        logger.info(f"Total added: {len(all_ids)} chunks")
+        return all_ids
+
+    def search(
+        self,
+        query: str,
+        n_results: int = 5,
+        category_filter: str | None = None,
+        score_threshold: float | None = None,
+    ) -> list[ToSSearchResult]:
+        where_filter = None
+        if category_filter:
+            where_filter = {"category": category_filter}
+
+        query_embedding = self.embedding_fn.embed_query(query)
+
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results,
+            where=where_filter,  # type: ignore[arg-type]
+            include=["documents", "metadatas", "distances"],  # type: ignore[arg-type]
+        )
+
+        search_results = []
+
+        if results["ids"] and results["ids"][0]:
+            for i, chunk_id in enumerate(results["ids"][0]):
+                distance = results["distances"][0][i] if results["distances"] else 0
+                score = 1 - distance
+
+                if score_threshold is not None and score < score_threshold:
+                    continue
+
+                metadata = results["metadatas"][0][i] if results["metadatas"] else {}
+
+                search_results.append(
+                    ToSSearchResult(
+                        section_title=str(metadata.get("section_title", "")),
+                        section_content=str(metadata.get("section_content", "")),
+                        document_title=str(metadata.get("document_title", "")),
+                        category=str(metadata.get("category", "")),
+                        parent_content=str(metadata.get("parent_content", "")),
+                        effective_date=str(metadata.get("effective_date", "")),
+                        source_url=str(metadata.get("source_url", "")),
+                        score=score,
+                        id=chunk_id,
+                    )
+                )
+
+        return search_results
+
+    def get_by_id(self, chunk_id: str) -> ToSSearchResult | None:
+        result = self.collection.get(
+            ids=[chunk_id],
+            include=["documents", "metadatas"],  # type: ignore[arg-type]
+        )
+
+        if result["ids"]:
+            metadata = result["metadatas"][0] if result["metadatas"] else {}
+
+            return ToSSearchResult(
+                section_title=str(metadata.get("section_title", "")),
+                section_content=str(metadata.get("section_content", "")),
+                document_title=str(metadata.get("document_title", "")),
+                category=str(metadata.get("category", "")),
+                parent_content=str(metadata.get("parent_content", "")),
+                effective_date=str(metadata.get("effective_date", "")),
+                source_url=str(metadata.get("source_url", "")),
+                score=1.0,
+                id=chunk_id,
+            )
+
+        return None
+
+    def delete(self, chunk_id: str) -> None:
+        self.collection.delete(ids=[chunk_id])
+        logger.debug(f"Deleted ToS chunk: {chunk_id}")
+
+    def count(self) -> int:
+        return self.collection.count()
+
+    def load_from_json(self, json_path: str | Path) -> list[str]:
+        json_path = Path(json_path)
+
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        logger.info(f"Loading {len(data)} ToS documents from {json_path}")
+        return self.add_tos_batch(data)
+
+    def clear(self) -> None:
+        self.client.delete_collection(self.COLLECTION_NAME)
+        self.collection = self.client.get_or_create_collection(
+            name=self.COLLECTION_NAME,
+            embedding_function=self.embedding_fn,  # type: ignore[arg-type]
+            metadata={"hnsw:space": "cosine"},
+        )
+        logger.info("Cleared all ToS chunks")
