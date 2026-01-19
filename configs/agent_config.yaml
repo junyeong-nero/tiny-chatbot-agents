@@ -1,0 +1,53 @@
+# Agent Configuration
+# Thresholds and settings for the chatbot agent
+
+# QnA Retriever settings
+qna:
+  threshold: 0.85  # Minimum similarity score for QnA match
+  n_results: 3     # Number of results to consider
+  persist_directory: "data/vectordb/qna"
+
+# ToS Retriever settings
+tos:
+  threshold: 0.7   # Minimum similarity score for ToS context
+  n_results: 5     # Number of context chunks to retrieve
+  persist_directory: "data/vectordb/tos"
+
+# Graph Store settings (Neo4j)
+graph:
+  enabled: false   # Enable/disable Neo4j integration
+  uri: "bolt://localhost:7687"
+  username: "neo4j"
+  password: "password"
+  database: "neo4j"
+
+# Hybrid Search settings
+hybrid_search:
+  alpha: 0.7       # Weight for vector score (1-alpha for graph score)
+
+# Verifier settings
+verifier:
+  enabled: true
+  confidence_threshold: 0.7
+  require_citations: true
+  use_llm_verification: true  # Requires LLM client
+
+# Feedback Handler settings
+feedback:
+  enabled: true
+  duplicate_threshold: 0.95   # Threshold for duplicate detection
+  require_quality_check: false
+  min_answer_length: 10
+
+# LLM settings (Local LLM via vLLM/Ollama)
+llm:
+  provider: "openai"  # Use OpenAI-compatible API
+  base_url: "http://localhost:8000/v1"  # vLLM server
+  model: "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
+  temperature: 0.1
+  max_tokens: 1024
+
+# Logging settings
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

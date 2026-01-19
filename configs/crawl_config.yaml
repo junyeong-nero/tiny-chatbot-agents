@@ -1,0 +1,30 @@
+urls:
+  tos: "https://www.truefriend.com/main/customer/guide/Guide.jsp"
+  qna: "https://www.truefriend.com/main/customer/support/_static/TF04fg000000.jsp"
+
+qna:
+  categories:
+    all: "전체"
+    "01": "인터넷뱅킹"
+    "02": "금융상품"
+    "03": "주식선물옵션"
+    "04": "투자정보"
+    "05": "거래시스템"
+    "07": "기타"
+  default_category: "all"
+
+tos:
+  types:
+    "1": "전체"
+    "2": "개인(신용)정보관련사항"
+
+output:
+  qna_dir: "data/raw/qna"
+  tos_dir: "data/raw/tos"
+  processed_dir: "data/processed"
+
+crawler:
+  headless: true
+  timeout: 30000
+  delay_between_pages: 1.0
+  delay_between_items: 0.5

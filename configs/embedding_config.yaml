@@ -1,0 +1,36 @@
+default_model: multilingual-e5-large
+
+models:
+  multilingual-e5-large:
+    name: intfloat/multilingual-e5-large
+    type: e5
+    dimension: 1024
+    max_seq_length: 512
+    normalize: true
+    description: "Best quality for Korean, slower"
+
+  multilingual-e5-base:
+    name: intfloat/multilingual-e5-base
+    type: e5
+    dimension: 768
+    max_seq_length: 512
+    normalize: true
+    description: "Good balance of quality and speed"
+
+  bge-m3:
+    name: BAAI/bge-m3
+    type: standard
+    dimension: 1024
+    max_seq_length: 8192
+    normalize: true
+    description: "Long context support, good Korean"
+
+  paraphrase-multilingual:
+    name: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+    type: standard
+    dimension: 768
+    max_seq_length: 128
+    normalize: true
+    description: "Fastest, decent Korean"
+
+device: null  # auto-detect (cuda > mps > cpu)
