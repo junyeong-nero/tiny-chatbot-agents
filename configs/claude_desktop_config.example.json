@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "rag-chatbot": {
+      "command": "python",
+      "args": ["-m", "src.mcp.server"],
+      "cwd": "/path/to/tiny-chatbot-agents",
+      "env": {
+        "OPENAI_API_KEY": "your-openai-api-key-here"
+      }
+    }
+  }
+}
