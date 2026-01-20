@@ -25,6 +25,14 @@ models:
     normalize: true
     description: "Best quality for Korean, long context (32K), slower"
 
+  qwen3-embedding-0.6b:
+    name: Qwen/Qwen3-Embedding-0.6B
+    type: standard
+    dimension: 1024
+    max_seq_length: 32768
+    normalize: true
+    description: "Lightweight Qwen3 embedding, long context (32K), fast"
+
   bge-m3:
     name: BAAI/bge-m3
     type: standard
