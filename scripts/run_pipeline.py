@@ -6,6 +6,7 @@ Usage:
     python scripts/run_pipeline.py -q "질문"        # Single question
     python scripts/run_pipeline.py --search-qna "키워드"   # Search QnA
     python scripts/run_pipeline.py --search-tos "키워드"   # Search ToS
+    python scripts/run_pipeline.py --verify -q "질문"      # With verification
 """
 
 import argparse
@@ -24,11 +25,27 @@ def print_response(response):
     print("\n" + "=" * 60)
     print(f"[Source: {response.source.value.upper()}]")
     print(f"[Confidence: {response.confidence:.2f}]")
+
+    # Show verification status
+    if response.verified:
+        print(f"[Verified: YES (score: {response.verification_score:.2f})]")
+    else:
+        print(f"[Verified: NO (score: {response.verification_score:.2f})]")
+
     print("=" * 60)
     print(f"\n{response.answer}\n")
 
     if response.citations:
         print(f"참조: {', '.join(response.citations)}")
+
+    # Show verification issues if any
+    if response.verification_issues:
+        print("\n[검증 경고]")
+        for issue in response.verification_issues:
+            print(f"  - {issue}")
+
+    if response.metadata.get("verification_reasoning"):
+        print(f"\n[검증 상세]: {response.metadata['verification_reasoning']}")
 
     if response.metadata.get("tokens_used"):
         print(f"\n(토큰 사용: {response.metadata['tokens_used']})")
@@ -108,6 +125,13 @@ def main():
     parser.add_argument(
         "--llm-model", type=str, default="gpt-4o-mini", help="OpenAI model"
     )
+    parser.add_argument(
+        "--verify", action="store_true", help="Enable hallucination verification"
+    )
+    parser.add_argument(
+        "--verify-threshold", type=float, default=0.7,
+        help="Verification confidence threshold (default: 0.7)"
+    )
 
     args = parser.parse_args()
 
@@ -128,11 +152,14 @@ def main():
         qna_db_path=args.qna_db,
         tos_db_path=args.tos_db,
         embedding_model=args.model,
+        enable_verification=args.verify,
+        verification_threshold=args.verify_threshold,
     )
 
     print(f"  QnA documents: {pipeline.qna_store.count()}")
     print(f"  ToS documents: {pipeline.tos_store.count()}")
     print(f"  LLM model: {args.llm_model}")
+    print(f"  Verification: {'enabled' if args.verify else 'disabled'}")
 
     if args.query:
         response = pipeline.query(args.query)

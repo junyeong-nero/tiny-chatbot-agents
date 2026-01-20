@@ -4,6 +4,7 @@ Flow:
 1. User query → Search QnA DB
 2. If similar question found (score >= threshold) → Use QnA as context for LLM
 3. If no match → Search ToS DB → Use ToS sections as context for LLM
+4. Verify answer using AnswerVerifier (hallucination detection)
 """
 
 import logging
@@ -15,6 +16,7 @@ from typing import Any
 
 from src.llm import OpenAIClient
 from src.vectorstore import QnAVectorStore, ToSVectorStore
+from src.verifier import AnswerVerifier, VerificationResult
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,10 @@ class PipelineResponse:
     context: list[dict[str, Any]] = field(default_factory=list)
     citations: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Verification fields
+    verified: bool = True
+    verification_score: float = 1.0
+    verification_issues: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +54,9 @@ class PipelineResponse:
             "context": self.context,
             "citations": self.citations,
             "metadata": self.metadata,
+            "verified": self.verified,
+            "verification_score": self.verification_score,
+            "verification_issues": self.verification_issues,
         }
 
 
@@ -59,28 +68,34 @@ class RAGPipeline:
     2. If score >= qna_threshold: Use matched Q&A as context for LLM answer
     3. If score < qna_threshold: Search ToS DB for relevant sections
     4. Use ToS sections as context for LLM answer
+    5. Verify answer using AnswerVerifier (hallucination detection)
 
     Attributes:
         qna_store: QnA Vector Store
         tos_store: ToS Vector Store
         llm: OpenAI LLM client
+        verifier: Answer verifier for hallucination detection
         qna_threshold: Threshold for QnA matching
         tos_threshold: Threshold for ToS retrieval
     """
 
     DEFAULT_QNA_THRESHOLD = 0.80
     DEFAULT_TOS_THRESHOLD = 0.65
+    DEFAULT_VERIFICATION_THRESHOLD = 0.7
 
     def __init__(
         self,
         llm: OpenAIClient | None = None,
         qna_store: QnAVectorStore | None = None,
         tos_store: ToSVectorStore | None = None,
+        verifier: AnswerVerifier | None = None,
         qna_db_path: str | Path = "data/vectordb/qna",
         tos_db_path: str | Path = "data/vectordb/tos",
         embedding_model: str | None = None,
         qna_threshold: float = DEFAULT_QNA_THRESHOLD,
         tos_threshold: float = DEFAULT_TOS_THRESHOLD,
+        enable_verification: bool = True,
+        verification_threshold: float = DEFAULT_VERIFICATION_THRESHOLD,
     ) -> None:
         """Initialize RAG Pipeline.
 
@@ -88,11 +103,14 @@ class RAGPipeline:
             llm: OpenAI client (created if not provided)
             qna_store: Pre-initialized QnA store
             tos_store: Pre-initialized ToS store
+            verifier: Answer verifier (created if not provided and enabled)
             qna_db_path: Path to QnA vector DB
             tos_db_path: Path to ToS vector DB
             embedding_model: Embedding model key
             qna_threshold: Minimum score for QnA match
             tos_threshold: Minimum score for ToS retrieval
+            enable_verification: Whether to enable hallucination verification
+            verification_threshold: Minimum verification score to pass
         """
         # Initialize LLM
         self.llm = llm or OpenAIClient()
@@ -107,13 +125,27 @@ class RAGPipeline:
             embedding_model=embedding_model,
         )
 
+        # Initialize verifier
+        self.enable_verification = enable_verification
+        self.verification_threshold = verification_threshold
+        if enable_verification:
+            self.verifier = verifier or AnswerVerifier(
+                llm_client=self.llm,
+                confidence_threshold=verification_threshold,
+                require_citations=True,
+                use_llm_verification=True,
+            )
+        else:
+            self.verifier = None
+
         self.qna_threshold = qna_threshold
         self.tos_threshold = tos_threshold
 
         logger.info(
             f"RAG Pipeline initialized. "
             f"QnA: {self.qna_store.count()} docs, "
-            f"ToS: {self.tos_store.count()} docs"
+            f"ToS: {self.tos_store.count()} docs, "
+            f"Verification: {'enabled' if enable_verification else 'disabled'}"
         )
 
     def query(self, user_query: str) -> PipelineResponse:
@@ -275,6 +307,22 @@ class RAGPipeline:
         avg_score = sum(r.score for r in relevant) / len(relevant)
         logger.info(f"ToS context found with avg score {avg_score:.3f}")
 
+        # Build context for verification
+        verification_context = [
+            {
+                "section_title": r.section_title,
+                "section_content": r.section_content,
+            }
+            for r in relevant
+        ]
+
+        # Verify answer
+        verification_result = self._verify_answer(
+            question=query,
+            answer=response.content,
+            context=verification_context,
+        )
+
         return PipelineResponse(
             query=query,
             answer=response.content,
@@ -294,7 +342,11 @@ class RAGPipeline:
                 "section_reference": section_match,
                 "llm_model": response.model,
                 "tokens_used": response.usage.get("total_tokens", 0),
+                "verification_reasoning": verification_result.reasoning if verification_result else None,
             },
+            verified=verification_result.verified if verification_result else True,
+            verification_score=verification_result.confidence if verification_result else 1.0,
+            verification_issues=verification_result.issues if verification_result else [],
         )
 
     def _answer_without_context(self, query: str) -> PipelineResponse:
@@ -449,3 +501,45 @@ class RAGPipeline:
             }
             for r in filtered
         ]
+
+    def _verify_answer(
+        self,
+        question: str,
+        answer: str,
+        context: list[dict[str, Any]],
+    ) -> VerificationResult | None:
+        """Verify answer using the hallucination verifier.
+
+        Args:
+            question: Original question
+            answer: Generated answer
+            context: Source context used for generation
+
+        Returns:
+            VerificationResult or None if verification is disabled
+        """
+        if not self.enable_verification or not self.verifier:
+            return None
+
+        try:
+            result = self.verifier.verify(
+                question=question,
+                answer=answer,
+                context=context,
+            )
+
+            if result.verified:
+                logger.info(
+                    f"Answer verified. Score: {result.confidence:.2f}"
+                )
+            else:
+                logger.warning(
+                    f"Answer verification failed. Score: {result.confidence:.2f}, "
+                    f"Issues: {result.issues}"
+                )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Verification failed with error: {e}")
+            return None

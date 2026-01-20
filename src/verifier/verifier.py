@@ -252,8 +252,12 @@ class AnswerVerifier:
                 ]
             )
 
-            content = response.get("content", "")
-            
+            # Handle both dict-like and object responses
+            if hasattr(response, "content"):
+                content = response.content
+            else:
+                content = response.get("content", "")
+
             # Parse JSON response
             result = json.loads(content)
             return result

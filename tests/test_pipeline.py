@@ -170,6 +170,53 @@ class TestRAGPipeline:
         assert results[0]["section_title"] == "제1조"
 
 
+    def test_tos_response_includes_verification(self, mock_qna_store, mock_tos_store, mock_llm):
+        """ToS 응답에 verification 결과가 포함되는지 테스트."""
+        mock_qna_store.search.return_value = []
+        mock_tos_store.search.return_value = [
+            MockToSResult("이용약관", "제1조 (목적)", "본 약관은...", 0.75)
+        ]
+
+        # Verification 비활성화 상태로 테스트
+        pipeline = RAGPipeline(
+            llm=mock_llm,
+            qna_store=mock_qna_store,
+            tos_store=mock_tos_store,
+            enable_verification=False,
+        )
+
+        response = pipeline.query("제1조에 대해 알려주세요")
+
+        assert response.source == ResponseSource.TOS
+        assert response.verified is True  # 비활성화 시 기본값
+
+    def test_verification_enabled(self, mock_qna_store, mock_tos_store, mock_llm):
+        """Verification 활성화 테스트."""
+        mock_qna_store.search.return_value = []
+        mock_tos_store.search.return_value = [
+            MockToSResult("이용약관", "제1조 (목적)", "본 약관은 서비스 이용에 관한...", 0.75)
+        ]
+        mock_llm.generate_with_context.return_value = MockLLMResponse(
+            "본 약관은 서비스 이용에 관한 조건을 규정합니다. [참조: 제1조]"
+        )
+        mock_llm.generate.return_value = MockLLMResponse(
+            '{"verified": true, "confidence": 0.9, "issues": [], "reasoning": "정확함"}'
+        )
+
+        pipeline = RAGPipeline(
+            llm=mock_llm,
+            qna_store=mock_qna_store,
+            tos_store=mock_tos_store,
+            enable_verification=True,
+        )
+
+        response = pipeline.query("제1조에 대해 알려주세요")
+
+        assert response.source == ResponseSource.TOS
+        # verification이 실행됨
+        assert "verification_reasoning" in response.metadata
+
+
 class TestPipelineResponse:
     def test_to_dict(self):
         """PipelineResponse to_dict 테스트."""
@@ -188,3 +235,21 @@ class TestPipelineResponse:
         assert d["query"] == "test"
         assert d["source"] == "qna"
         assert d["confidence"] == 0.9
+
+    def test_to_dict_includes_verification(self):
+        """PipelineResponse to_dict에 verification 필드 포함 테스트."""
+        response = PipelineResponse(
+            query="test",
+            answer="answer",
+            source=ResponseSource.TOS,
+            confidence=0.9,
+            verified=False,
+            verification_score=0.5,
+            verification_issues=["출처 없음"],
+        )
+
+        d = response.to_dict()
+
+        assert d["verified"] is False
+        assert d["verification_score"] == 0.5
+        assert d["verification_issues"] == ["출처 없음"]
