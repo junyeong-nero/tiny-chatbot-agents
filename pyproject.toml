@@ -26,6 +26,13 @@ graph = [
 llm = [
     "openai>=1.0.0",
 ]
+mcp = [
+    "fastmcp>=0.1.0",
+]
+all = [
+    "openai>=1.0.0",
+    "fastmcp>=0.1.0",
+]
 
 [build-system]
 requires = ["hatchling"]
