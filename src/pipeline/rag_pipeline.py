@@ -1,0 +1,451 @@
+"""Unified RAG Pipeline for QnA and ToS retrieval.
+
+Flow:
+1. User query → Search QnA DB
+2. If similar question found (score >= threshold) → Use QnA as context for LLM
+3. If no match → Search ToS DB → Use ToS sections as context for LLM
+"""
+
+import logging
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+from src.llm import OpenAIClient
+from src.vectorstore import QnAVectorStore, ToSVectorStore
+
+logger = logging.getLogger(__name__)
+
+
+class ResponseSource(Enum):
+    """Source of the response."""
+
+    QNA = "qna"
+    TOS = "tos"
+    NO_CONTEXT = "no_context"
+
+
+@dataclass
+class PipelineResponse:
+    """Response from RAG Pipeline."""
+
+    query: str
+    answer: str
+    source: ResponseSource
+    confidence: float
+    context: list[dict[str, Any]] = field(default_factory=list)
+    citations: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query": self.query,
+            "answer": self.answer,
+            "source": self.source.value,
+            "confidence": self.confidence,
+            "context": self.context,
+            "citations": self.citations,
+            "metadata": self.metadata,
+        }
+
+
+class RAGPipeline:
+    """Unified RAG Pipeline with QnA-first, ToS-fallback strategy.
+
+    The pipeline follows this flow:
+    1. Search QnA DB for similar questions
+    2. If score >= qna_threshold: Use matched Q&A as context for LLM answer
+    3. If score < qna_threshold: Search ToS DB for relevant sections
+    4. Use ToS sections as context for LLM answer
+
+    Attributes:
+        qna_store: QnA Vector Store
+        tos_store: ToS Vector Store
+        llm: OpenAI LLM client
+        qna_threshold: Threshold for QnA matching
+        tos_threshold: Threshold for ToS retrieval
+    """
+
+    DEFAULT_QNA_THRESHOLD = 0.80
+    DEFAULT_TOS_THRESHOLD = 0.65
+
+    def __init__(
+        self,
+        llm: OpenAIClient | None = None,
+        qna_store: QnAVectorStore | None = None,
+        tos_store: ToSVectorStore | None = None,
+        qna_db_path: str | Path = "data/vectordb/qna",
+        tos_db_path: str | Path = "data/vectordb/tos",
+        embedding_model: str | None = None,
+        qna_threshold: float = DEFAULT_QNA_THRESHOLD,
+        tos_threshold: float = DEFAULT_TOS_THRESHOLD,
+    ) -> None:
+        """Initialize RAG Pipeline.
+
+        Args:
+            llm: OpenAI client (created if not provided)
+            qna_store: Pre-initialized QnA store
+            tos_store: Pre-initialized ToS store
+            qna_db_path: Path to QnA vector DB
+            tos_db_path: Path to ToS vector DB
+            embedding_model: Embedding model key
+            qna_threshold: Minimum score for QnA match
+            tos_threshold: Minimum score for ToS retrieval
+        """
+        # Initialize LLM
+        self.llm = llm or OpenAIClient()
+
+        # Initialize stores
+        self.qna_store = qna_store or QnAVectorStore(
+            persist_directory=qna_db_path,
+            embedding_model=embedding_model,
+        )
+        self.tos_store = tos_store or ToSVectorStore(
+            persist_directory=tos_db_path,
+            embedding_model=embedding_model,
+        )
+
+        self.qna_threshold = qna_threshold
+        self.tos_threshold = tos_threshold
+
+        logger.info(
+            f"RAG Pipeline initialized. "
+            f"QnA: {self.qna_store.count()} docs, "
+            f"ToS: {self.tos_store.count()} docs"
+        )
+
+    def query(self, user_query: str) -> PipelineResponse:
+        """Process a user query through the RAG pipeline.
+
+        Args:
+            user_query: User's question
+
+        Returns:
+            PipelineResponse with answer and metadata
+        """
+        logger.info(f"Processing query: {user_query[:50]}...")
+
+        # Step 1: Try QnA DB
+        qna_response = self._try_qna(user_query)
+        if qna_response:
+            return qna_response
+
+        # Step 2: Try ToS DB
+        tos_response = self._try_tos(user_query)
+        if tos_response:
+            return tos_response
+
+        # Step 3: No context found - answer without context
+        return self._answer_without_context(user_query)
+
+    def _try_qna(self, query: str) -> PipelineResponse | None:
+        """Try to answer using QnA DB.
+
+        Args:
+            query: User query
+
+        Returns:
+            PipelineResponse if match found, None otherwise
+        """
+        results = self.qna_store.search(query, n_results=3)
+
+        if not results:
+            logger.debug("No QnA results found")
+            return None
+
+        best = results[0]
+        if best.score < self.qna_threshold:
+            logger.debug(
+                f"QnA score {best.score:.3f} below threshold {self.qna_threshold}"
+            )
+            return None
+
+        # Build context from matched Q&A
+        context_parts = []
+        for r in results:
+            if r.score >= self.qna_threshold * 0.9:  # Include close matches
+                context_parts.append(f"Q: {r.question}\nA: {r.answer}")
+
+        context_str = "\n\n".join(context_parts)
+
+        # Generate answer using LLM with QnA context
+        system_prompt = """당신은 금융 서비스 고객 상담 AI입니다.
+
+제공된 FAQ 정보를 바탕으로 고객 질문에 답변합니다.
+
+규칙:
+1. FAQ 답변을 기반으로 하되, 자연스럽게 재구성하여 답변하세요.
+2. FAQ에 없는 내용은 추가하지 마세요.
+3. 친절하고 전문적인 톤을 유지하세요.
+4. 필요시 "자세한 사항은 고객센터로 문의해주세요"를 안내하세요."""
+
+        response = self.llm.generate_with_context(
+            query=query,
+            context=context_str,
+            system_prompt=system_prompt,
+        )
+
+        logger.info(f"QnA match found with score {best.score:.3f}")
+
+        return PipelineResponse(
+            query=query,
+            answer=response.content,
+            source=ResponseSource.QNA,
+            confidence=best.score,
+            context=[
+                {"question": r.question, "answer": r.answer, "score": r.score}
+                for r in results
+                if r.score >= self.qna_threshold * 0.9
+            ],
+            citations=[f"FAQ: {best.question}"],
+            metadata={
+                "matched_question": best.question,
+                "category": best.category,
+                "sub_category": best.sub_category,
+                "llm_model": response.model,
+                "tokens_used": response.usage.get("total_tokens", 0),
+            },
+        )
+
+    def _try_tos(self, query: str) -> PipelineResponse | None:
+        """Try to answer using ToS DB.
+
+        Args:
+            query: User query
+
+        Returns:
+            PipelineResponse if relevant sections found, None otherwise
+        """
+        # Check if query explicitly references a specific section
+        section_match = self._extract_section_reference(query)
+
+        n_results = 5
+        results = self.tos_store.search(query, n_results=n_results)
+
+        if not results:
+            logger.debug("No ToS results found")
+            return None
+
+        # Filter by threshold
+        relevant = [r for r in results if r.score >= self.tos_threshold]
+
+        if not relevant:
+            logger.debug(
+                f"ToS scores below threshold {self.tos_threshold}. "
+                f"Best: {results[0].score:.3f}"
+            )
+            return None
+
+        # Build context from ToS sections
+        context_parts = []
+        for r in relevant:
+            section_text = f"[{r.document_title}]\n"
+            if r.section_title:
+                section_text += f"{r.section_title}\n"
+            section_text += r.section_content
+            context_parts.append(section_text)
+
+        context_str = "\n\n---\n\n".join(context_parts)
+
+        # Generate answer using LLM with ToS context
+        system_prompt = """당신은 금융 서비스 약관 전문 상담 AI입니다.
+
+제공된 약관 내용을 바탕으로 고객 질문에 답변합니다.
+
+규칙:
+1. 약관 내용만을 기반으로 정확하게 답변하세요.
+2. 약관에 없는 내용은 절대 지어내지 마세요.
+3. 확실하지 않으면 "해당 내용은 약관에서 확인되지 않습니다"라고 답변하세요.
+4. 답변 마지막에 참조한 약관/조항을 명시하세요. 예: [참조: OO약관 제N조]
+5. 전문 용어는 쉽게 풀어서 설명하세요."""
+
+        response = self.llm.generate_with_context(
+            query=query,
+            context=context_str,
+            system_prompt=system_prompt,
+        )
+
+        # Extract citations from answer
+        citations = self._extract_citations(response.content)
+        if not citations:
+            citations = [f"{r.document_title} - {r.section_title}" for r in relevant[:2]]
+
+        avg_score = sum(r.score for r in relevant) / len(relevant)
+        logger.info(f"ToS context found with avg score {avg_score:.3f}")
+
+        return PipelineResponse(
+            query=query,
+            answer=response.content,
+            source=ResponseSource.TOS,
+            confidence=avg_score,
+            context=[
+                {
+                    "document_title": r.document_title,
+                    "section_title": r.section_title,
+                    "section_content": r.section_content[:500],
+                    "score": r.score,
+                }
+                for r in relevant
+            ],
+            citations=citations,
+            metadata={
+                "section_reference": section_match,
+                "llm_model": response.model,
+                "tokens_used": response.usage.get("total_tokens", 0),
+            },
+        )
+
+    def _answer_without_context(self, query: str) -> PipelineResponse:
+        """Generate answer when no context is found.
+
+        Args:
+            query: User query
+
+        Returns:
+            PipelineResponse with general answer
+        """
+        system_prompt = """당신은 금융 서비스 고객 상담 AI입니다.
+
+질문에 대한 관련 정보를 찾을 수 없습니다.
+
+규칙:
+1. 정보를 찾을 수 없다고 정중하게 안내하세요.
+2. 고객센터 연락처나 추가 도움 방법을 안내하세요.
+3. 절대로 정보를 지어내지 마세요."""
+
+        response = self.llm.generate_with_context(
+            query=query,
+            context="관련 정보를 찾을 수 없습니다.",
+            system_prompt=system_prompt,
+        )
+
+        return PipelineResponse(
+            query=query,
+            answer=response.content,
+            source=ResponseSource.NO_CONTEXT,
+            confidence=0.0,
+            context=[],
+            citations=[],
+            metadata={
+                "llm_model": response.model,
+                "tokens_used": response.usage.get("total_tokens", 0),
+            },
+        )
+
+    def _extract_section_reference(self, query: str) -> str | None:
+        """Extract section reference from query (e.g., '제1조', '1조 1항').
+
+        Args:
+            query: User query
+
+        Returns:
+            Extracted section reference or None
+        """
+        patterns = [
+            r"제?\s*(\d+)\s*조\s*(?:제?\s*(\d+)\s*항)?",  # 제1조 제2항, 1조 2항
+            r"(\d+)\s*조\s*(\d+)\s*항",  # 1조 1항
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, query)
+            if match:
+                article = match.group(1)
+                paragraph = match.group(2) if len(match.groups()) > 1 else None
+                if paragraph:
+                    return f"제{article}조 제{paragraph}항"
+                return f"제{article}조"
+
+        return None
+
+    def _extract_citations(self, answer: str) -> list[str]:
+        """Extract citations from LLM answer.
+
+        Args:
+            answer: LLM generated answer
+
+        Returns:
+            List of citation strings
+        """
+        citations = []
+        # Pattern: [참조: 제N조 N항] or [참조: OO약관]
+        pattern = r"\[참조:\s*([^\]]+)\]"
+        matches = re.findall(pattern, answer)
+        citations.extend(matches)
+        return citations
+
+    def search_qna(self, query: str, n_results: int = 5) -> list[dict[str, Any]]:
+        """Direct QnA search (for MCP tool).
+
+        Args:
+            query: Search query
+            n_results: Number of results
+
+        Returns:
+            List of QnA results as dicts
+        """
+        results = self.qna_store.search(query, n_results=n_results)
+        return [
+            {
+                "question": r.question,
+                "answer": r.answer,
+                "category": r.category,
+                "sub_category": r.sub_category,
+                "score": r.score,
+            }
+            for r in results
+        ]
+
+    def search_tos(self, query: str, n_results: int = 5) -> list[dict[str, Any]]:
+        """Direct ToS search (for MCP tool).
+
+        Args:
+            query: Search query
+            n_results: Number of results
+
+        Returns:
+            List of ToS results as dicts
+        """
+        results = self.tos_store.search(query, n_results=n_results)
+        return [
+            {
+                "document_title": r.document_title,
+                "section_title": r.section_title,
+                "section_content": r.section_content,
+                "category": r.category,
+                "score": r.score,
+            }
+            for r in results
+        ]
+
+    def get_tos_section(
+        self, document_title: str | None = None, section_pattern: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Get specific ToS section by title or pattern.
+
+        Args:
+            document_title: Filter by document title
+            section_pattern: Search for section (e.g., "제1조")
+
+        Returns:
+            List of matching ToS sections
+        """
+        query = section_pattern or document_title or ""
+        results = self.tos_store.search(query, n_results=10)
+
+        filtered = results
+        if document_title:
+            filtered = [r for r in results if document_title in r.document_title]
+
+        return [
+            {
+                "document_title": r.document_title,
+                "section_title": r.section_title,
+                "section_content": r.section_content,
+                "effective_date": r.effective_date,
+                "source_url": r.source_url,
+                "score": r.score,
+            }
+            for r in filtered
+        ]
