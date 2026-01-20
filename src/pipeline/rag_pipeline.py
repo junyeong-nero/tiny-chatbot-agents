@@ -576,7 +576,7 @@ class RAGPipeline:
         return citations
 
     def search_qna(self, query: str, n_results: int = 5) -> list[dict[str, Any]]:
-        """Direct QnA search (for MCP tool).
+        """Direct QnA search.
 
         Args:
             query: Search query
@@ -598,7 +598,7 @@ class RAGPipeline:
         ]
 
     def search_tos(self, query: str, n_results: int = 5) -> list[dict[str, Any]]:
-        """Direct ToS search (for MCP tool).
+        """Direct ToS search.
 
         Args:
             query: Search query
@@ -619,36 +619,6 @@ class RAGPipeline:
             for r in results
         ]
 
-    def get_tos_section(
-        self, document_title: str | None = None, section_pattern: str | None = None
-    ) -> list[dict[str, Any]]:
-        """Get specific ToS section by title or pattern.
-
-        Args:
-            document_title: Filter by document title
-            section_pattern: Search for section (e.g., "제1조")
-
-        Returns:
-            List of matching ToS sections
-        """
-        query = section_pattern or document_title or ""
-        results = self.tos_store.search(query, n_results=10)
-
-        filtered = results
-        if document_title:
-            filtered = [r for r in results if document_title in r.document_title]
-
-        return [
-            {
-                "document_title": r.document_title,
-                "section_title": r.section_title,
-                "section_content": r.section_content,
-                "effective_date": r.effective_date,
-                "source_url": r.source_url,
-                "score": r.score,
-            }
-            for r in filtered
-        ]
 
     def _verify_answer(
         self,
