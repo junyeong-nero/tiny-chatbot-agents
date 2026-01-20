@@ -96,6 +96,7 @@ class RAGPipeline:
         tos_threshold: float = DEFAULT_TOS_THRESHOLD,
         enable_verification: bool = True,
         verification_threshold: float = DEFAULT_VERIFICATION_THRESHOLD,
+        enable_hybrid_tos_search: bool = False,
     ) -> None:
         """Initialize RAG Pipeline.
 
@@ -111,6 +112,7 @@ class RAGPipeline:
             tos_threshold: Minimum score for ToS retrieval
             enable_verification: Whether to enable hallucination verification
             verification_threshold: Minimum verification score to pass
+            enable_hybrid_tos_search: Enable rule-based and triplet search for ToS
         """
         # Initialize LLM
         self.llm = llm or OpenAIClient()
@@ -123,7 +125,11 @@ class RAGPipeline:
         self.tos_store = tos_store or ToSVectorStore(
             persist_directory=tos_db_path,
             embedding_model=embedding_model,
+            enable_hybrid_search=enable_hybrid_tos_search,
         )
+
+        # Track hybrid search setting
+        self.enable_hybrid_tos_search = enable_hybrid_tos_search
 
         # Initialize verifier
         self.enable_verification = enable_verification
@@ -145,7 +151,8 @@ class RAGPipeline:
             f"RAG Pipeline initialized. "
             f"QnA: {self.qna_store.count()} docs, "
             f"ToS: {self.tos_store.count()} docs, "
-            f"Verification: {'enabled' if enable_verification else 'disabled'}"
+            f"Verification: {'enabled' if enable_verification else 'disabled'}, "
+            f"Hybrid ToS: {'enabled' if enable_hybrid_tos_search else 'disabled'}"
         )
 
     def query(self, user_query: str) -> PipelineResponse:
@@ -254,6 +261,33 @@ class RAGPipeline:
         section_match = self._extract_section_reference(query)
 
         n_results = 5
+
+        # Use hybrid search if enabled
+        if self.enable_hybrid_tos_search:
+            hybrid_results = self.tos_store.search_hybrid(query, n_results=n_results)
+            if not hybrid_results:
+                logger.debug("No ToS results found (hybrid)")
+                return None
+
+            # Use combined_score for hybrid, score for regular
+            score_key = "combined_score" if "combined_score" in hybrid_results[0] else "score"
+            relevant = [r for r in hybrid_results if r.get(score_key, 0) >= self.tos_threshold]
+
+            if not relevant:
+                best_score = hybrid_results[0].get(score_key, 0)
+                logger.debug(
+                    f"ToS scores below threshold {self.tos_threshold}. "
+                    f"Best: {best_score:.3f} (hybrid)"
+                )
+                return None
+
+            return self._build_tos_response_from_hybrid(
+                query=query,
+                results=relevant,
+                section_match=section_match,
+            )
+
+        # Regular vector-only search
         results = self.tos_store.search(query, n_results=n_results)
 
         if not results:
@@ -349,6 +383,119 @@ class RAGPipeline:
             verification_issues=verification_result.issues if verification_result else [],
         )
 
+    def _build_tos_response_from_hybrid(
+        self,
+        query: str,
+        results: list[dict[str, Any]],
+        section_match: str | None,
+    ) -> PipelineResponse:
+        """Build ToS response from hybrid search results.
+
+        Args:
+            query: User query
+            results: Hybrid search results with combined scores
+            section_match: Extracted section reference from query
+
+        Returns:
+            PipelineResponse
+        """
+        # Build context from hybrid results
+        context_parts = []
+        for r in results:
+            section_text = f"[{r.get('document_title', '')}]\n"
+            if r.get("section_title"):
+                section_text += f"{r['section_title']}\n"
+            section_text += r.get("section_content", "")
+            context_parts.append(section_text)
+
+        context_str = "\n\n---\n\n".join(context_parts)
+
+        # Generate answer using LLM with ToS context
+        system_prompt = """당신은 금융 서비스 약관 전문 상담 AI입니다.
+
+제공된 약관 내용을 바탕으로 고객 질문에 답변합니다.
+
+규칙:
+1. 약관 내용만을 기반으로 정확하게 답변하세요.
+2. 약관에 없는 내용은 절대 지어내지 마세요.
+3. 확실하지 않으면 "해당 내용은 약관에서 확인되지 않습니다"라고 답변하세요.
+4. 답변 마지막에 참조한 약관/조항을 명시하세요. 예: [참조: OO약관 제N조]
+5. 전문 용어는 쉽게 풀어서 설명하세요."""
+
+        response = self.llm.generate_with_context(
+            query=query,
+            context=context_str,
+            system_prompt=system_prompt,
+        )
+
+        # Extract citations from answer
+        citations = self._extract_citations(response.content)
+        if not citations:
+            citations = [
+                f"{r.get('document_title', '')} - {r.get('section_title', '')}"
+                for r in results[:2]
+            ]
+
+        # Use combined_score if available
+        score_key = "combined_score" if "combined_score" in results[0] else "score"
+        avg_score = sum(r.get(score_key, 0) for r in results) / len(results)
+        logger.info(f"ToS context found with avg score {avg_score:.3f} (hybrid)")
+
+        # Build context for verification
+        verification_context = [
+            {
+                "section_title": r.get("section_title", ""),
+                "section_content": r.get("section_content", ""),
+            }
+            for r in results
+        ]
+
+        # Verify answer
+        verification_result = self._verify_answer(
+            question=query,
+            answer=response.content,
+            context=verification_context,
+        )
+
+        # Collect hybrid-specific metadata
+        matched_keywords = []
+        matched_triplets = []
+        for r in results:
+            matched_keywords.extend(r.get("matched_keywords", []))
+            matched_triplets.extend(r.get("matched_triplets", []))
+
+        return PipelineResponse(
+            query=query,
+            answer=response.content,
+            source=ResponseSource.TOS,
+            confidence=avg_score,
+            context=[
+                {
+                    "document_title": r.get("document_title", ""),
+                    "section_title": r.get("section_title", ""),
+                    "section_content": r.get("section_content", "")[:500],
+                    "combined_score": r.get("combined_score", 0),
+                    "vector_score": r.get("vector_score", 0),
+                    "rule_score": r.get("rule_score", 0),
+                    "triplet_score": r.get("triplet_score", 0),
+                }
+                for r in results
+            ],
+            citations=citations,
+            metadata={
+                "section_reference": section_match,
+                "llm_model": response.model,
+                "tokens_used": response.usage.get("total_tokens", 0),
+                "verification_reasoning": verification_result.reasoning if verification_result else None,
+                "hybrid_search": True,
+                "matched_keywords": list(set(matched_keywords)),
+                "matched_triplets": matched_triplets[:5],  # Limit triplets shown
+            },
+            verified=verification_result.verified if verification_result else True,
+            verification_score=verification_result.confidence if verification_result else 1.0,
+            verification_issues=verification_result.issues if verification_result else [],
+        )
+
     def _answer_without_context(self, query: str) -> PipelineResponse:
         """Generate answer when no context is found.
 
@@ -384,6 +531,7 @@ class RAGPipeline:
                 "llm_model": response.model,
                 "tokens_used": response.usage.get("total_tokens", 0),
             },
+
         )
 
     def _extract_section_reference(self, query: str) -> str | None:
