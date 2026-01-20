@@ -198,6 +198,7 @@ class ToSVectorStore:
         persist_directory: str | Path = "data/vectordb/tos",
         embedding_model: str | None = None,
         device: str | None = None,
+        enable_hybrid_search: bool = False,
     ) -> None:
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
@@ -220,10 +221,30 @@ class ToSVectorStore:
 
         self.chunker = ToSChunker()
 
+        # Hybrid search (lazy initialization)
+        self._enable_hybrid_search = enable_hybrid_search
+        self._hybrid_search = None
+
         logger.info(
             f"ToS Vector Store initialized. Collection '{self.COLLECTION_NAME}' "
-            f"has {self.collection.count()} documents."
+            f"has {self.collection.count()} documents. "
+            f"Hybrid search: {'enabled' if enable_hybrid_search else 'disabled'}"
         )
+
+    @property
+    def hybrid_search(self):
+        """Get or create hybrid search instance."""
+        if self._hybrid_search is None and self._enable_hybrid_search:
+            from src.tos_search import ToSHybridSearch, ToSRuleMatcher, TripletStore
+
+            triplet_path = self.persist_directory / "triplets.json"
+            self._hybrid_search = ToSHybridSearch(
+                vector_store=self,
+                rule_matcher=ToSRuleMatcher(),
+                triplet_store=TripletStore(persist_path=triplet_path),
+            )
+        return self._hybrid_search
+
 
     def add_tos_document(self, tos_item: dict[str, Any]) -> list[str]:
         chunks = self.chunker.chunk_document(tos_item)
@@ -388,4 +409,49 @@ class ToSVectorStore:
             embedding_function=self.embedding_fn,  # type: ignore[arg-type]
             metadata={"hnsw:space": "cosine"},
         )
+        # Clear hybrid search state
+        if self._hybrid_search:
+            self._hybrid_search.triplet_store.clear()
         logger.info("Cleared all ToS chunks")
+
+    def search_hybrid(
+        self,
+        query: str,
+        n_results: int = 5,
+        category_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search using hybrid method (vector + rule + triplet).
+
+        Args:
+            query: Search query
+            n_results: Number of results
+            category_filter: Optional category filter
+
+        Returns:
+            List of search results with combined scores
+        """
+        if not self._enable_hybrid_search or not self.hybrid_search:
+            # Fallback to regular search
+            results = self.search(query, n_results, category_filter)
+            return [r.to_dict() for r in results]
+
+        hybrid_results = self.hybrid_search.search(
+            query=query,
+            n_results=n_results,
+            category_filter=category_filter,
+        )
+        return [r.to_dict() for r in hybrid_results]
+
+    def build_triplet_index(self) -> int:
+        """Build triplet index from stored documents.
+
+        Returns:
+            Number of triplets extracted
+        """
+        if not self._enable_hybrid_search:
+            logger.warning("Hybrid search is not enabled")
+            return 0
+
+        if self.hybrid_search:
+            return self.hybrid_search.build_triplet_index()
+        return 0
