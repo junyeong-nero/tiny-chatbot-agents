@@ -1,165 +1,245 @@
-# 🤖 tiny-chatbot-agents
+# tiny-chatbot-agents
 
-> 기업 보안을 위한 **Local LLM 기반** 약관 및 QnA CS 챗봇
+> 약관 및 QnA 기반 CS 챗봇
 
-외부 API를 사용하지 않고 사내 GPU 환경에서 운영 가능한 **신뢰할 수 있는 상담 에이전트**를 구축하는 프로젝트입니다.
+QnA DB와 약관(ToS) DB를 활용한 **계층적 RAG 파이프라인**을 제공하는 프로젝트입니다.
 
 ---
 
-## 📋 프로젝트 개요
+## 프로젝트 개요
 
 ### 핵심 목표
-- **100% 로컬 환경**: 기업 내부 보안 정책 준수를 위해 외부 API 호출 없이 운영
 - **계층적 검색 파이프라인**: QnA → 약관 → 상담원 순서의 효율적인 질문 처리
+- **MCP 서버 지원**: Claude Desktop 등 MCP 클라이언트와 연동 가능
 - **자동 확장 시스템**: 상담원 답변이 자동으로 QnA DB에 추가되어 지속적으로 학습
 
 ### 기술 스택
 | 구분 | 기술 |
 |------|------|
-| **LLM** | Qwen3 / Upstage SOLAR Open 100B / LG K-EXAONE (Local) |
-| **Embedding** | Qwen3-Embedding-8B (다국어/한국어 최적화) |
-| **Vector DB** | ChromaDB / Milvus |
-| **Graph DB** | Neo4j |
-| **Framework** | LangChain / LlamaIndex |
-| **Serving** | vLLM / Ollama |
+| **LLM** | OpenAI GPT-4o / GPT-4o-mini |
+| **Embedding** | Qwen3-Embedding (0.6B/8B), multilingual-e5-large |
+| **Vector DB** | ChromaDB |
+| **MCP** | FastMCP |
+| **Package Manager** | uv |
 
 ---
 
-## 🔄 시스템 아키텍처
+## 시스템 아키텍처
 
-### 전체 파이프라인
+### RAG 파이프라인
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              사용자 질문 입력                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  [STEP 1] QnA Vector DB 검색                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │ • 자주 묻는 질문(FAQ) 데이터베이스에서 유사 질문 검색                      │    │
-│  │ • Similarity Score 계산                                              │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                       │
-                          ┌────────────┴────────────┐
-                          │  Score ≥ Threshold?     │
-                          └────────────┬────────────┘
-                         YES │                  │ NO
-                             ▼                  ▼
-              ┌──────────────────────┐  ┌──────────────────────────────────────┐
-              │   QnA 답변 반환       │  │  [STEP 2] 약관 DB 검색 (RAG)          │
-              │   + 출처 명시         │  │  ┌──────────────────────────────────┐ │
-              └──────────────────────┘  │  │ • Vector + Graph Hybrid Search   │ │
-                                        │  │ • LLM 기반 답변 생성              │ │
-                                        │  │ • Verifier로 Hallucination 검증  │ │
-                                        │  └──────────────────────────────────┘ │
-                                        └──────────────────────────────────────┘
-                                                         │
-                                            ┌────────────┴────────────┐
-                                            │  관련 약관 존재 &        │
-                                            │  Verifier 통과?         │
-                                            └────────────┬────────────┘
-                                           YES │                  │ NO
-                                               ▼                  ▼
-                            ┌──────────────────────┐  ┌──────────────────────────┐
-                            │   약관 기반 답변 반환  │  │  [STEP 3] 상담원 연결     │
-                            │   + Citation 포함    │  │  ┌──────────────────────┐ │
-                            └──────────────────────┘  │  │ "상담원 연결 중..."   │ │
-                                                      │  └──────────────────────┘ │
-                                                      └──────────────────────────┘
-                                                                   │
-                                                                   ▼
-                                                      ┌──────────────────────────┐
-                                                      │  [STEP 4] 자동 학습       │
-                                                      │  ┌──────────────────────┐ │
-                                                      │  │ 상담원 답변 완료 시    │ │
-                                                      │  │ → QnA DB 자동 추가    │ │
-                                                      │  │ → Vector 임베딩 생성  │ │
-                                                      │  └──────────────────────┘ │
-                                                      └──────────────────────────┘
+사용자 질문
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│  [STEP 1] QnA DB 검색                                │
+│  • FAQ 데이터베이스에서 유사 질문 검색                  │
+│  • Similarity Score >= 0.80 → LLM context로 답변 생성 │
+└─────────────────────────────────────────────────────┘
+    │ (매칭 실패)
+    ▼
+┌─────────────────────────────────────────────────────┐
+│  [STEP 2] ToS DB 검색 (RAG)                          │
+│  • 약관 조항 의미론적 검색                             │
+│  • "제1조 1항" 등 명시적 조항 참조 지원                 │
+│  • Score >= 0.65 → LLM context로 답변 생성            │
+└─────────────────────────────────────────────────────┘
+    │ (검색 실패)
+    ▼
+┌─────────────────────────────────────────────────────┐
+│  [STEP 3] No Context 응답                            │
+│  • 관련 정보 없음 안내                                │
+│  • 고객센터 연결 안내                                 │
+└─────────────────────────────────────────────────────┘
 ```
 
 ### 데이터베이스 구성
 
 | DB | 용도 | 데이터 |
 |----|------|--------|
-| **QnA Vector DB** | 자주 묻는 질문 검색 | 질문-답변 쌍 (FAQ + 상담원 답변 누적) |
-| **약관 Vector DB** | 의미 기반 약관 검색 | 이용약관 조항별 Chunk |
-| **약관 Graph DB** | 관계 기반 약관 검색 | 조항 간 참조/인과 관계 |
+| **QnA Vector DB** | FAQ 검색 | 질문-답변 쌍 |
+| **ToS Vector DB** | 약관 검색 | 이용약관 조항별 Chunk |
 
-## 📁 프로젝트 구조
+---
+
+## 프로젝트 구조
 
 ```
 tiny-chatbot-agents/
 ├── data/
-│   ├── raw/                 # 크롤링 원본 데이터
-│   │   ├── qna/             # QnA 원본
-│   │   └── tos/             # 약관 원본
-│   ├── processed/           # 전처리된 데이터
-│   └── embeddings/          # 임베딩 캐시
+│   ├── raw/                    # 크롤링 원본 데이터
+│   │   ├── qna/                # QnA JSON 파일
+│   │   └── tos/                # 약관 JSON 파일
+│   └── vectordb/               # ChromaDB 저장소
+│       ├── qna/
+│       └── tos/
 ├── src/
-│   ├── crawlers/            # 데이터 크롤러
-│   ├── indexing/            # Vector/Graph 인덱싱
-│   ├── retrieval/           # 검색 파이프라인
-│   │   ├── qna_retriever.py     # QnA 검색 (1단계)
-│   │   ├── tos_retriever.py     # 약관 RAG (2단계)
-│   │   └── hybrid_search.py     # 하이브리드 검색
-│   ├── agents/              # LLM 에이전트
-│   ├── verifier/            # Hallucination 검증기
-│   ├── router/              # 질문 라우팅
-│   └── feedback/            # 상담원 답변 → QnA 자동 추가
-├── configs/                 # 설정 파일
-├── evaluation/              # Ragas 평가 스크립트
-└── docker/                  # Docker 구성
+│   ├── crawlers/               # 데이터 크롤러
+│   ├── vectorstore/            # Vector DB (ChromaDB)
+│   │   ├── qna_store.py
+│   │   ├── tos_store.py
+│   │   └── embeddings.py
+│   ├── llm/                    # LLM 클라이언트
+│   │   └── openai_client.py
+│   ├── pipeline/               # RAG 파이프라인
+│   │   └── rag_pipeline.py
+│   ├── mcp/                    # MCP 서버
+│   │   └── server.py
+│   ├── retrieval/              # 검색 모듈
+│   ├── router/                 # 질문 라우팅
+│   └── verifier/               # Hallucination 검증
+├── scripts/
+│   ├── ingest_qna.py           # QnA 데이터 적재
+│   ├── ingest_tos.py           # ToS 데이터 적재
+│   ├── run_pipeline.py         # CLI 실행
+│   └── run_mcp_server.py       # MCP 서버 실행
+├── configs/
+│   ├── embedding_config.yaml
+│   └── claude_desktop_config.example.json
+└── tests/
 ```
 
 ---
 
-## 🚀 시작하기
+## 시작하기
+
+### 1. 설치
 
 ```bash
 # 저장소 클론
 git clone https://github.com/your-username/tiny-chatbot-agents.git
 cd tiny-chatbot-agents
 
-# 환경 설정
-pip install -r requirements.txt
+# 의존성 설치 (uv 사용)
+uv pip install -e ".[all]"
 
-# Local LLM 서버 실행 (vLLM)
-python -m vllm.entrypoints.openai.api_server \
-    --model LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct \
-    --port 8000
+# 또는 pip 사용
+pip install -e ".[all]"
+```
 
-# 챗봇 실행
-python main.py
+### 2. 데이터 적재
+
+```bash
+# QnA 데이터 적재
+python scripts/ingest_qna.py
+
+# ToS 데이터 적재
+python scripts/ingest_tos.py
+
+# 특정 파일만 적재
+python scripts/ingest_qna.py --file data/raw/qna/qnacrawler_xxx.json
+
+# 기존 데이터 삭제 후 적재
+python scripts/ingest_tos.py --clear
+```
+
+### 3. 파이프라인 실행
+
+```bash
+# OpenAI API 키 설정
+export OPENAI_API_KEY="sk-..."
+
+# Interactive 모드
+python scripts/run_pipeline.py
+
+# 단일 질문
+python scripts/run_pipeline.py -q "계좌 해지 방법이 뭐야?"
+
+# 검색만 테스트
+python scripts/run_pipeline.py --search-qna "비밀번호"
+python scripts/run_pipeline.py --search-tos "제1조"
 ```
 
 ---
 
-## 📊 평가 지표
+## MCP 서버
+
+MCP (Model Context Protocol) 서버를 통해 Claude Desktop 등 MCP 클라이언트와 연동할 수 있습니다.
+
+### MCP 도구 목록
+
+| 도구 | 설명 |
+|------|------|
+| `ask_question` | QnA→ToS 순서로 검색 후 LLM 답변 생성 |
+| `search_faq` | FAQ(QnA) DB 직접 검색 |
+| `search_terms` | 약관(ToS) DB 검색 ("제1조" 또는 키워드) |
+| `get_section` | 특정 약관 조항 전체 내용 조회 |
+| `list_documents` | 등록된 약관 목록 조회 |
+
+### 실행 방법
+
+```bash
+# MCP 서버 실행
+python scripts/run_mcp_server.py
+
+# 또는
+python -m src.mcp.server
+```
+
+### Claude Desktop 설정
+
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "rag-chatbot": {
+      "command": "python",
+      "args": ["-m", "src.mcp.server"],
+      "cwd": "/path/to/tiny-chatbot-agents",
+      "env": {
+        "OPENAI_API_KEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+---
+
+## 설정
+
+### 임베딩 모델 (`configs/embedding_config.yaml`)
+
+```yaml
+default_model: multilingual-e5-large
+
+models:
+  multilingual-e5-large:
+    name: intfloat/multilingual-e5-large
+    dimension: 1024
+
+  qwen3-embedding-0.6b:
+    name: Qwen/Qwen3-Embedding-0.6B
+    dimension: 1024
+    max_seq_length: 32768
+
+  qwen3-embedding-8b:
+    name: Qwen/Qwen3-Embedding-8B
+    dimension: 4096
+    max_seq_length: 32768
+```
+
+### 파이프라인 임계값
+
+| 파라미터 | 기본값 | 설명 |
+|----------|--------|------|
+| `qna_threshold` | 0.80 | QnA 매칭 최소 유사도 |
+| `tos_threshold` | 0.65 | ToS 검색 최소 유사도 |
+
+---
+
+## 평가 지표
 
 | 지표 | 목표 | 설명 |
 |------|------|------|
 | QnA Hit Rate | > 60% | QnA DB에서 바로 답변되는 비율 |
 | Faithfulness | > 0.9 | 약관 RAG 답변의 사실 기반 정도 |
 | Answer Relevance | > 0.85 | 질문과 답변의 관련성 |
-| Human Escalation | < 15% | 상담원 연결 비율 (낮을수록 좋음) |
-| Auto-Extension Rate | - | 일일 자동 추가되는 QnA 수 |
 
 ---
 
-## 🔑 핵심 차별점
-
-1. **완전 로컬 운영**: 외부 API 의존성 제로, 기업 보안 정책 준수
-2. **계층적 검색**: QnA → 약관 → 상담원 순서로 효율적 처리
-3. **자동 확장 시스템**: 상담원 답변이 QnA DB에 자동 추가되어 지속 성장
-4. **신뢰도 기반 응답**: Verifier + Confidence Score로 잘못된 정보 차단
-5. **정량적 평가**: Ragas 기반 자동 평가로 지속적인 품질 관리
-
----
-
-## 📝 License
+## License
 
 MIT License
