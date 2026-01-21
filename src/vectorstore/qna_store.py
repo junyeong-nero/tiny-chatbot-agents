@@ -4,6 +4,7 @@ This module provides a vector store specifically designed for QnA (FAQ) data,
 supporting similarity search on questions to find relevant answers.
 """
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -138,10 +139,8 @@ class QnAVectorStore:
 
         if qna_id is None:
             # Generate ID from question hash and timestamp
-            import hashlib
-
             hash_input = f"{question}_{created_at}"
-            qna_id = hashlib.md5(hash_input.encode()).hexdigest()[:12]
+            qna_id = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
 
         metadata = {
             "answer": answer,
@@ -201,10 +200,8 @@ class QnAVectorStore:
                 created_at = item.get("crawled_at") or datetime.now().isoformat()
 
                 # Generate ID
-                import hashlib
-
                 hash_input = f"{question}_{created_at}"
-                qna_id = hashlib.md5(hash_input.encode()).hexdigest()[:12]
+                qna_id = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
 
                 ids.append(qna_id)
                 documents.append(question)

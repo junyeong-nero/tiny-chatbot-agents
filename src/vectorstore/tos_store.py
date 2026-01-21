@@ -285,9 +285,9 @@ class ToSVectorStore:
                 if not embed_text:
                     continue
 
-                chunk_id = hashlib.md5(
+                chunk_id = hashlib.sha256(
                     f"{chunk['document_title']}_{section_title}_{section_content[:100]}_{chunk['crawled_at']}".encode()
-                ).hexdigest()[:12]
+                ).hexdigest()[:16]
 
                 ids.append(chunk_id)
                 documents.append(embed_text)
