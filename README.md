@@ -16,11 +16,14 @@ QnA DB와 약관(ToS) DB를 활용한 **계층적 RAG 파이프라인**을 제�
 ### 기술 스택
 | 구분 | 기술 |
 |------|------|
-| **LLM** | OpenAI GPT-4o / GPT-4o-mini |
+| **LLM (Production)** | vLLM, sglang, ollama (로컬 서빙) |
+| **LLM (Testing)** | OpenAI GPT-4o-mini (테스트 전용) |
 | **Embedding** | Qwen3-Embedding (0.6B/8B), multilingual-e5-large |
 | **Vector DB** | ChromaDB |
 | **MCP** | FastMCP |
 | **Package Manager** | uv |
+
+> **보안 참고**: 프로덕션 환경에서는 데이터 보안을 위해 외부 API 대신 로컬 LLM 서빙 프레임워크(vLLM, sglang, ollama)를 사용합니다.
 
 ---
 
@@ -86,7 +89,10 @@ tiny-chatbot-agents/
 │   │   ├── triplet_store.py    # Subject-Predicate-Object 검색
 │   │   └── hybrid_search.py    # Vector + Rule + Triplet 결합
 │   ├── llm/                    # LLM 클라이언트
-│   │   └── openai_client.py
+│   │   ├── base.py             # 추상 베이스 클래스
+│   │   ├── local_client.py     # vLLM/sglang/ollama 클라이언트
+│   │   ├── openai_client.py    # OpenAI 클라이언트 (테스트용)
+│   │   └── factory.py          # 클라이언트 팩토리
 │   ├── pipeline/               # RAG 파이프라인
 │   │   └── rag_pipeline.py
 │   ├── mcp/                    # MCP 서버
@@ -137,19 +143,49 @@ python scripts/ingest_qna.py --file data/raw/qna/qnacrawler_xxx.json
 python scripts/ingest_tos.py --clear
 ```
 
-### 3. 파이프라인 실행
+### 3. LLM 서버 실행
+
+프로덕션 환경에서는 로컬 LLM 서버를 먼저 실행해야 합니다.
 
 ```bash
-# OpenAI API 키 설정
-export OPENAI_API_KEY="sk-..."
+# vLLM 서버 (권장)
+python -m vllm.entrypoints.openai.api_server \
+    --model meta-llama/Llama-3.1-8B-Instruct \
+    --port 8000
+
+# 또는 sglang
+python -m sglang.launch_server \
+    --model meta-llama/Llama-3.1-8B-Instruct \
+    --port 30000
+
+# 또는 ollama
+ollama serve  # 기본 포트 11434
+ollama pull llama3.1:8b
+```
+
+### 4. 파이프라인 실행
+
+```bash
+# LLM 프로바이더 설정 (기본값: vllm)
+export LLM_PROVIDER="vllm"  # vllm, sglang, ollama, openai
 
 # Interactive 모드
 python scripts/run_pipeline.py
 
-# 단일 질문
+# 단일 질문 (vLLM 사용)
 python scripts/run_pipeline.py -q "계좌 해지 방법이 뭐야?"
 
-# 검색만 테스트
+# 특정 프로바이더 지정
+python scripts/run_pipeline.py --llm-provider ollama -q "환불 규정 알려줘"
+
+# 특정 모델 지정
+python scripts/run_pipeline.py --llm-provider ollama --llm-model mistral:7b -q "질문"
+
+# 테스트용 OpenAI 사용 (외부 API 주의)
+export OPENAI_API_KEY="sk-..."
+python scripts/run_pipeline.py --llm-provider openai -q "테스트 질문"
+
+# 검색만 테스트 (LLM 불필요)
 python scripts/run_pipeline.py --search-qna "비밀번호"
 python scripts/run_pipeline.py --search-tos "제1조"
 ```
@@ -192,16 +228,67 @@ python -m src.mcp.server
       "args": ["-m", "src.mcp.server"],
       "cwd": "/path/to/tiny-chatbot-agents",
       "env": {
-        "OPENAI_API_KEY": "sk-..."
+        "LLM_PROVIDER": "vllm",
+        "VLLM_API_BASE": "http://localhost:8000/v1"
       }
     }
   }
 }
 ```
 
+> **참고**: 테스트 목적으로 OpenAI를 사용하려면 `LLM_PROVIDER`를 `openai`로, `OPENAI_API_KEY`를 설정하세요.
+
 ---
 
 ## 설정
+
+### LLM 프로바이더
+
+프로덕션 환경에서는 보안을 위해 로컬 LLM 서빙 프레임워크를 사용합니다.
+
+| 프로바이더 | 기본 Endpoint | 기본 모델 | 용도 |
+|-----------|--------------|----------|------|
+| **vLLM** | `http://localhost:8000/v1` | `meta-llama/Llama-3.1-8B-Instruct` | Production (권장) |
+| **sglang** | `http://localhost:30000/v1` | `meta-llama/Llama-3.1-8B-Instruct` | Production |
+| **ollama** | `http://localhost:11434/v1` | `llama3.1:8b` | Production / 개발 |
+| **openai** | OpenAI API | `gpt-4o-mini` | **테스트 전용** |
+
+**환경변수 설정:**
+```bash
+# 프로바이더 선택
+export LLM_PROVIDER="vllm"  # vllm, sglang, ollama, openai
+
+# 커스텀 endpoint (선택사항)
+export VLLM_API_BASE="http://gpu-server:8000/v1"
+export SGLANG_API_BASE="http://gpu-server:30000/v1"
+export OLLAMA_API_BASE="http://localhost:11434/v1"
+
+# OpenAI 테스트용 (프로덕션 사용 금지)
+export OPENAI_API_KEY="sk-..."
+```
+
+**코드에서 사용:**
+```python
+from src.llm import create_llm_client, LLMProvider, LocalLLMClient
+
+# 환경변수 기반 자동 선택 (기본: vllm)
+client = create_llm_client()
+
+# 명시적 프로바이더 지정
+client = create_llm_client(provider=LLMProvider.OLLAMA)
+
+# 커스텀 설정
+client = LocalLLMClient(
+    provider=LLMProvider.VLLM,
+    model="meta-llama/Llama-3.1-70B-Instruct",
+    base_url="http://gpu-server:8000/v1",
+    temperature=0.5,
+)
+
+# Health check
+if client.health_check():
+    response = client.generate([{"role": "user", "content": "Hello"}])
+```
 
 ### 임베딩 모델 (`configs/embedding_config.yaml`)
 
