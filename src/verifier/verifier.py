@@ -258,8 +258,8 @@ class AnswerVerifier:
             else:
                 content = response.get("content", "")
 
-            # Parse JSON response
-            result = json.loads(content)
+            # Try to extract JSON from response (local LLMs may include extra text)
+            result = self._parse_json_response(content)
             return result
 
         except json.JSONDecodeError as e:
@@ -268,6 +268,50 @@ class AnswerVerifier:
         except Exception as e:
             logger.error(f"LLM verification failed: {e}")
             return None
+
+    def _parse_json_response(self, content: str) -> dict[str, Any] | None:
+        """Parse JSON from LLM response, handling various formats.
+
+        Local LLMs may wrap JSON in markdown code blocks or include extra text.
+
+        Args:
+            content: Raw LLM response content
+
+        Returns:
+            Parsed JSON dict or None if parsing fails
+        """
+        if not content:
+            return None
+
+        # Try direct JSON parsing first
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        # Try to extract JSON from markdown code block
+        json_pattern = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+        match = json_pattern.search(content)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # Try to find JSON object in the response
+        brace_pattern = re.compile(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", re.DOTALL)
+        matches = brace_pattern.findall(content)
+        for m in matches:
+            try:
+                result = json.loads(m)
+                # Validate it has expected keys
+                if "verified" in result or "confidence" in result:
+                    return result
+            except json.JSONDecodeError:
+                continue
+
+        logger.warning(f"Could not extract JSON from response: {content[:200]}...")
+        return None
 
     def _calculate_confidence(
         self,
