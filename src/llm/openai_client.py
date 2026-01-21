@@ -1,35 +1,25 @@
-"""OpenAI LLM Client for RAG pipeline."""
+"""OpenAI LLM Client for RAG pipeline.
+
+WARNING: This client uses external OpenAI API and should only be used
+for testing purposes. For production use, prefer local serving frameworks
+like vLLM, sglang, or ollama via LocalLLMClient.
+"""
 
 import logging
 import os
-from dataclasses import dataclass
-from typing import Any
 
 from openai import OpenAI
+
+from .base import BaseLLMClient, LLMResponse
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class LLMResponse:
-    """Response from LLM."""
-
-    content: str
-    model: str
-    usage: dict[str, int]
-    finish_reason: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "content": self.content,
-            "model": self.model,
-            "usage": self.usage,
-            "finish_reason": self.finish_reason,
-        }
-
-
-class OpenAIClient:
+class OpenAIClient(BaseLLMClient):
     """OpenAI API client for chat completions.
+
+    WARNING: This client sends data to external OpenAI servers.
+    For production use with sensitive data, use LocalLLMClient instead.
 
     Attributes:
         model: Model name to use (default: gpt-4o-mini)
@@ -38,15 +28,13 @@ class OpenAIClient:
     """
 
     DEFAULT_MODEL = "gpt-4o-mini"
-    DEFAULT_TEMPERATURE = 0.7
-    DEFAULT_MAX_TOKENS = 1024
 
     def __init__(
         self,
         api_key: str | None = None,
         model: str = DEFAULT_MODEL,
-        temperature: float = DEFAULT_TEMPERATURE,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float = BaseLLMClient.DEFAULT_TEMPERATURE,
+        max_tokens: int = BaseLLMClient.DEFAULT_MAX_TOKENS,
         base_url: str | None = None,
     ) -> None:
         """Initialize OpenAI client.
@@ -58,22 +46,27 @@ class OpenAIClient:
             max_tokens: Maximum tokens in response
             base_url: Optional base URL for API (for compatible endpoints)
         """
+        super().__init__(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError(
                 "OpenAI API key required. Set OPENAI_API_KEY env var or pass api_key."
             )
 
-        self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=base_url,
         )
 
-        logger.info(f"OpenAI client initialized with model: {model}")
+        logger.warning(
+            f"OpenAI client initialized with model: {model}. "
+            "NOTE: Using external API - for testing only."
+        )
 
     def generate(
         self,
@@ -119,45 +112,4 @@ class OpenAIClient:
             logger.error(f"OpenAI API error: {e}")
             raise
 
-    def generate_with_context(
-        self,
-        query: str,
-        context: str,
-        system_prompt: str | None = None,
-    ) -> LLMResponse:
-        """Generate response with RAG context.
-
-        Args:
-            query: User's question
-            context: Retrieved context to use
-            system_prompt: Optional system prompt override
-
-        Returns:
-            LLMResponse with generated answer
-        """
-        if system_prompt is None:
-            system_prompt = """당신은 금융 서비스 고객 상담 AI입니다.
-
-규칙:
-1. 제공된 컨텍스트 정보만을 기반으로 정확하게 답변하세요.
-2. 컨텍스트에 없는 내용은 절대 지어내지 마세요.
-3. 확실하지 않으면 "해당 내용은 확인되지 않습니다"라고 답변하세요.
-4. 친절하고 전문적인 톤으로 답변하세요.
-5. 답변 끝에 참조한 출처가 있다면 명시하세요."""
-
-        user_prompt = f"""다음 정보를 참고하여 질문에 답변해주세요.
-
-[참고 정보]
-{context}
-
-[질문]
-{query}
-
-[답변]"""
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-
-        return self.generate(messages)
+        # generate_with_context is inherited from BaseLLMClient
