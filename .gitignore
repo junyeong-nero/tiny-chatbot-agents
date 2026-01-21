@@ -11,3 +11,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Vector database (runtime data)
+data/vectordb/
