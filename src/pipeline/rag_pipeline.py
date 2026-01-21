@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from src.llm import OpenAIClient
+from src.llm import BaseLLMClient, create_llm_client
 from src.vectorstore import QnAVectorStore, ToSVectorStore
 from src.verifier import AnswerVerifier, VerificationResult
 
@@ -85,7 +85,7 @@ class RAGPipeline:
 
     def __init__(
         self,
-        llm: OpenAIClient | None = None,
+        llm: BaseLLMClient | None = None,
         qna_store: QnAVectorStore | None = None,
         tos_store: ToSVectorStore | None = None,
         verifier: AnswerVerifier | None = None,
@@ -115,7 +115,9 @@ class RAGPipeline:
             enable_hybrid_tos_search: Enable rule-based and triplet search for ToS
         """
         # Initialize LLM
-        self.llm = llm or OpenAIClient()
+        # Uses LLM_PROVIDER env var (default: vllm for production)
+        # Set LLM_PROVIDER=openai for testing only
+        self.llm = llm or create_llm_client()
 
         # Initialize stores
         self.qna_store = qna_store or QnAVectorStore(
