@@ -286,7 +286,7 @@ class ToSVectorStore:
                     continue
 
                 chunk_id = hashlib.md5(
-                    f"{chunk['document_title']}_{section_title}_{chunk['crawled_at']}".encode()
+                    f"{chunk['document_title']}_{section_title}_{section_content[:100]}_{chunk['crawled_at']}".encode()
                 ).hexdigest()[:12]
 
                 ids.append(chunk_id)
