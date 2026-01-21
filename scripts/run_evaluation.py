@@ -69,6 +69,27 @@ def parse_args():
         action="store_true",
         help="Generate markdown and CSV reports",
     )
+
+    # LLM-as-a-Judge options
+    parser.add_argument(
+        "--use-llm-judge",
+        action="store_true",
+        help="Enable LLM-as-a-Judge evaluation",
+    )
+    parser.add_argument(
+        "--judge-model",
+        type=str,
+        default="gpt-4o",
+        help="Model to use for LLM-as-a-Judge (default: gpt-4o)",
+    )
+    parser.add_argument(
+        "--judge-provider",
+        type=str,
+        default="openai",
+        choices=["openai", "anthropic", "google"],
+        help="Provider for judge model (default: openai)",
+    )
+
     return parser.parse_args()
 
 
@@ -121,8 +142,28 @@ def main():
         logger.error(f"Dataset not found: {dataset_path}")
         sys.exit(1)
 
+    # Create LLM judge if requested
+    llm_judge = None
+    if args.use_llm_judge:
+        try:
+            from src.evaluation import create_llm_judge
+
+            logger.info(
+                f"Creating LLM judge with {args.judge_provider}/{args.judge_model}"
+            )
+            llm_judge = create_llm_judge(
+                provider=args.judge_provider,
+                model=args.judge_model,
+            )
+        except Exception as e:
+            logger.error(f"Failed to create LLM judge: {e}")
+            logger.info("Continuing without LLM-as-a-Judge evaluation")
+
     # Create evaluator
-    evaluator = LLMEvaluator()
+    evaluator = LLMEvaluator(
+        llm_judge=llm_judge,
+        use_llm_judge=args.use_llm_judge and llm_judge is not None,
+    )
 
     # Run evaluation for each model
     all_results = []
@@ -164,6 +205,15 @@ def main():
         print(f"  Faithfulness: {result.mean_faithfulness:.3f}")
         print(f"  Latency: {result.mean_latency_ms:.1f}ms (±{result.std_latency_ms:.1f})")
         print(f"  Verification Rate: {result.verification_rate * 100:.1f}%")
+
+        # Print LLM-judge scores if available
+        if result.mean_llm_judge_score > 0:
+            print(f"\n  --- LLM-as-a-Judge ({result.llm_judge_model}) ---")
+            print(f"  Overall Score: {result.mean_llm_judge_score:.2f}/5")
+            print(f"  Correctness: {result.mean_llm_correctness:.2f}/5")
+            print(f"  Helpfulness: {result.mean_llm_helpfulness:.2f}/5")
+            print(f"  Faithfulness: {result.mean_llm_faithfulness:.2f}/5")
+            print(f"  Fluency: {result.mean_llm_fluency:.2f}/5")
 
     # Generate reports if requested
     if args.report and all_results:

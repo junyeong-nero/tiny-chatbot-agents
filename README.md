@@ -75,6 +75,7 @@ tiny-chatbot-agents/
 │   ├── raw/                    # 크롤링 원본 데이터
 │   │   ├── qna/                # QnA JSON 파일
 │   │   └── tos/                # 약관 JSON 파일
+│   ├── evaluation/             # 평가 데이터셋
 │   └── vectordb/               # ChromaDB 저장소
 │       ├── qna/
 │       └── tos/
@@ -97,15 +98,26 @@ tiny-chatbot-agents/
 │   │   └── rag_pipeline.py
 │   ├── mcp/                    # MCP 서버
 │   │   └── server.py
+│   ├── evaluation/             # 평가 시스템
+│   │   ├── evaluator.py        # 기본 메트릭 평가
+│   │   ├── runner.py           # 배치 평가 실행기
+│   │   ├── report.py           # 리포트 생성
+│   │   ├── frontier_client.py  # Claude/GPT/Gemini 클라이언트
+│   │   ├── llm_judge.py        # LLM-as-a-Judge
+│   │   ├── judge_prompts.py    # 평가 프롬프트
+│   │   └── dataset_generator.py # 데이터셋 생성
 │   └── verifier/               # Hallucination 검증
 ├── scripts/
 │   ├── ingest_qna.py           # QnA 데이터 적재
 │   ├── ingest_tos.py           # ToS 데이터 적재
 │   ├── run_pipeline.py         # CLI 실행
-│   └── run_mcp_server.py       # MCP 서버 실행
+│   ├── run_mcp_server.py       # MCP 서버 실행
+│   ├── run_evaluation.py       # 평가 실행
+│   └── generate_dataset.py     # 평가 데이터셋 생성
 ├── configs/
 │   ├── embedding_config.yaml
 │   └── claude_desktop_config.example.json
+├── results/                    # 평가 결과 출력
 └── tests/
 ```
 
@@ -353,13 +365,190 @@ response = pipeline.query("환불 규정이 어떻게 되나요?")
 
 ---
 
-## 평가 지표
+## 평가 시스템
+
+### 평가 지표
 
 | 지표 | 목표 | 설명 |
 |------|------|------|
 | QnA Hit Rate | > 60% | QnA DB에서 바로 답변되는 비율 |
 | Faithfulness | > 0.9 | 약관 RAG 답변의 사실 기반 정도 |
 | Answer Relevance | > 0.85 | 질문과 답변의 관련성 |
+| Similarity | > 0.75 | 생성 답변과 정답 간 의미 유사도 |
+| BLEU | > 0.3 | 생성 답변과 정답 간 BLEU 점수 |
+
+### LLM-as-a-Judge 평가
+
+Frontier 모델(Claude, GPT, Gemini)을 사용하여 생성된 답변의 품질을 자동 평가합니다.
+
+**평가 기준 (1-5점):**
+
+| 기준 | 설명 |
+|------|------|
+| **Correctness** | 정답과의 사실적 일치도 |
+| **Helpfulness** | 사용자 질문에 대한 유용성 |
+| **Faithfulness** | 제공된 컨텍스트에 대한 충실도 |
+| **Fluency** | 자연스러운 한국어 표현 |
+
+### 평가 데이터셋 생성
+
+Frontier 모델을 사용하여 "골든 답변"(정답)이 포함된 평가 데이터셋을 생성할 수 있습니다.
+
+```bash
+# QnA Store에서 샘플링하여 데이터셋 생성
+python scripts/generate_dataset.py \
+    --from-qna \
+    --n-samples 50 \
+    --provider anthropic \
+    --model claude-sonnet-4-20250514 \
+    --output data/evaluation/golden_dataset.json
+
+# 질문 파일에서 데이터셋 생성
+python scripts/generate_dataset.py \
+    --questions data/questions.json \
+    --provider openai \
+    --model gpt-4o \
+    --output data/evaluation/golden_dataset.json
+
+# 드라이런 (API 호출 없이 확인)
+python scripts/generate_dataset.py --from-qna --dry-run
+```
+
+**데이터셋 생성 옵션:**
+
+| 옵션 | 설명 |
+|------|------|
+| `--from-qna` | QnA Vector Store에서 샘플링 |
+| `--questions <file>` | 질문 JSON 파일에서 로드 |
+| `--provider` | `openai`, `anthropic`, `google` 중 선택 |
+| `--model` | 사용할 모델 (기본값: gpt-4o / claude-sonnet-4-20250514) |
+| `--n-samples` | 샘플 개수 (--from-qna 사용 시) |
+| `--categories` | 카테고리 필터 (쉼표 구분) |
+| `--seed` | 랜덤 시드 (재현성 확보) |
+
+### 평가 실행
+
+```bash
+# 기본 평가 (Similarity, BLEU, Faithfulness)
+python scripts/run_evaluation.py \
+    --dataset data/evaluation/golden_dataset.json \
+    --models "llama3.1:8b" \
+    --provider ollama
+
+# LLM-as-a-Judge 평가 활성화
+python scripts/run_evaluation.py \
+    --dataset data/evaluation/golden_dataset.json \
+    --models "llama3.1:8b,mistral:7b" \
+    --use-llm-judge \
+    --judge-provider openai \
+    --judge-model gpt-4o \
+    --report
+
+# 테스트 케이스 수 제한
+python scripts/run_evaluation.py \
+    --dataset data/evaluation/golden_dataset.json \
+    --models "llama3.1:8b" \
+    --limit 10 \
+    --use-llm-judge
+```
+
+**평가 CLI 옵션:**
+
+| 옵션 | 설명 |
+|------|------|
+| `--models` | 평가할 모델 (쉼표 구분) |
+| `--dataset` | 평가 데이터셋 JSON 경로 |
+| `--provider` | LLM 프로바이더 (vllm, sglang, ollama, openai) |
+| `--use-llm-judge` | LLM-as-a-Judge 평가 활성화 |
+| `--judge-provider` | Judge 모델 프로바이더 (openai, anthropic, google) |
+| `--judge-model` | Judge 모델 (기본값: gpt-4o) |
+| `--limit` | 평가 케이스 수 제한 |
+| `--report` | Markdown/CSV 리포트 생성 |
+| `--no-pipeline` | 파이프라인 없이 예상 답변만 비교 |
+
+### 평가용 의존성 설치
+
+```bash
+# 전체 설치 (evaluation 포함)
+uv pip install -e ".[all]"
+
+# 또는 evaluation만 설치
+uv pip install -e ".[evaluation]"
+```
+
+**필요한 API 키:**
+
+| 프로바이더 | 환경변수 |
+|-----------|----------|
+| OpenAI | `OPENAI_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| Google | `GOOGLE_API_KEY` |
+
+### 평가 아키텍처
+
+```
+평가 데이터셋 생성:
+┌─────────────────────────────────────────────────────────────┐
+│  questions.json / QnA Store                                  │
+│            │                                                 │
+│            ▼                                                 │
+│  ┌─────────────────────────┐                                 │
+│  │  Frontier Client        │  (Claude/GPT/Gemini)           │
+│  │  - Golden Answer 생성    │                                 │
+│  └─────────────────────────┘                                 │
+│            │                                                 │
+│            ▼                                                 │
+│  golden_dataset.json (질문 + 골든 답변)                       │
+└─────────────────────────────────────────────────────────────┘
+
+평가 실행:
+┌─────────────────────────────────────────────────────────────┐
+│  golden_dataset.json                                         │
+│            │                                                 │
+│            ▼                                                 │
+│  ┌─────────────────────────┐                                 │
+│  │  RAG Pipeline           │  (평가 대상 모델)               │
+│  │  - 답변 생성             │                                 │
+│  └─────────────────────────┘                                 │
+│            │                                                 │
+│            ▼                                                 │
+│  ┌─────────────────────────┐                                 │
+│  │  LLM Evaluator          │                                 │
+│  │  - Similarity, BLEU     │  (기본 메트릭)                   │
+│  │  - Faithfulness         │                                 │
+│  └─────────────────────────┘                                 │
+│            │                                                 │
+│            ▼                                                 │
+│  ┌─────────────────────────┐                                 │
+│  │  LLM-as-a-Judge         │  (선택적)                       │
+│  │  - Correctness          │                                 │
+│  │  - Helpfulness          │                                 │
+│  │  - Faithfulness         │                                 │
+│  │  - Fluency              │                                 │
+│  └─────────────────────────┘                                 │
+│            │                                                 │
+│            ▼                                                 │
+│  results/eval_<timestamp>.json + report.md                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 평가 모듈 구조
+
+```
+src/evaluation/
+├── __init__.py           # 패키지 exports
+├── evaluator.py          # 기본 메트릭 (Similarity, BLEU, Faithfulness)
+├── runner.py             # 배치 평가 실행기
+├── report.py             # Markdown/CSV 리포트 생성
+├── frontier_client.py    # Claude/GPT/Gemini 통합 클라이언트
+├── judge_prompts.py      # LLM-as-a-Judge 프롬프트
+├── llm_judge.py          # LLM-as-a-Judge 구현
+└── dataset_generator.py  # 골든 답변 데이터셋 생성
+
+scripts/
+├── run_evaluation.py     # 평가 실행 CLI
+└── generate_dataset.py   # 데이터셋 생성 CLI
+```
 
 ---
 

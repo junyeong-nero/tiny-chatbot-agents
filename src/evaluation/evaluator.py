@@ -38,6 +38,15 @@ class EvaluationMetrics:
     verified: bool = False
     verification_issues: list[str] = field(default_factory=list)
 
+    # LLM-as-Judge metrics
+    llm_judge_score: float = 0.0  # Overall 1-5 score
+    llm_judge_normalized: float = 0.0  # 0-1 normalized
+    llm_correctness: float = 0.0
+    llm_helpfulness: float = 0.0
+    llm_faithfulness: float = 0.0
+    llm_fluency: float = 0.0
+    llm_judge_summary: str = ""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "question": self.question,
@@ -52,6 +61,14 @@ class EvaluationMetrics:
             "output_tokens": self.output_tokens,
             "verified": self.verified,
             "verification_issues": self.verification_issues,
+            # LLM-as-Judge metrics
+            "llm_judge_score": self.llm_judge_score,
+            "llm_judge_normalized": self.llm_judge_normalized,
+            "llm_correctness": self.llm_correctness,
+            "llm_helpfulness": self.llm_helpfulness,
+            "llm_faithfulness": self.llm_faithfulness,
+            "llm_fluency": self.llm_fluency,
+            "llm_judge_summary": self.llm_judge_summary,
         }
 
 
@@ -63,21 +80,28 @@ class LLMEvaluator:
     - BLEU score (n-gram overlap)
     - Faithfulness (using AnswerVerifier)
     - Latency and token usage
+    - LLM-as-Judge metrics (optional)
     """
 
     def __init__(
         self,
         embedding_model: Any = None,
         verifier: Any = None,
+        llm_judge: Any = None,
+        use_llm_judge: bool = False,
     ) -> None:
         """Initialize the evaluator.
 
         Args:
             embedding_model: Optional embedding model for similarity
             verifier: Optional AnswerVerifier for faithfulness check
+            llm_judge: Optional LLMJudge for LLM-as-a-Judge evaluation
+            use_llm_judge: Whether to use LLM-as-Judge evaluation
         """
         self.embedding_model = embedding_model
         self.verifier = verifier
+        self.llm_judge = llm_judge
+        self.use_llm_judge = use_llm_judge
 
         # Lazy load embeddings if not provided
         self._embeddings = None
@@ -249,6 +273,11 @@ class LLMEvaluator:
             question, generated_answer, context
         )
 
+        # Compute LLM-as-Judge metrics if enabled
+        llm_scores = self._compute_llm_judge_scores(
+            question, expected_answer, generated_answer, context
+        )
+
         return EvaluationMetrics(
             question=question,
             expected_answer=expected_answer,
@@ -262,4 +291,60 @@ class LLMEvaluator:
             output_tokens=output_tokens,
             verified=verified,
             verification_issues=issues,
+            **llm_scores,
         )
+
+    def _compute_llm_judge_scores(
+        self,
+        question: str,
+        expected_answer: str,
+        generated_answer: str,
+        context: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """Compute LLM-as-Judge scores if judge is configured.
+
+        Args:
+            question: Original question
+            expected_answer: Reference answer (golden)
+            generated_answer: Generated answer to evaluate
+            context: Optional retrieval context
+
+        Returns:
+            Dict with LLM judge score fields
+        """
+        empty_scores = {
+            "llm_judge_score": 0.0,
+            "llm_judge_normalized": 0.0,
+            "llm_correctness": 0.0,
+            "llm_helpfulness": 0.0,
+            "llm_faithfulness": 0.0,
+            "llm_fluency": 0.0,
+            "llm_judge_summary": "",
+        }
+
+        if not self.use_llm_judge or self.llm_judge is None:
+            return empty_scores
+
+        try:
+            result = self.llm_judge.judge(
+                question=question,
+                golden_answer=expected_answer,
+                generated_answer=generated_answer,
+                context=context,
+            )
+
+            return {
+                "llm_judge_score": result.overall_score,
+                "llm_judge_normalized": result.normalized_score,
+                "llm_correctness": result.get_criterion_score("correctness"),
+                "llm_helpfulness": result.get_criterion_score("helpfulness"),
+                "llm_faithfulness": result.get_criterion_score("faithfulness"),
+                "llm_fluency": result.get_criterion_score("fluency"),
+                "llm_judge_summary": result.summary,
+            }
+        except Exception as e:
+            logger.warning(f"LLM judge evaluation failed: {e}")
+            return {
+                **empty_scores,
+                "llm_judge_summary": f"Error: {e}",
+            }

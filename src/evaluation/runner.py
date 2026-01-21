@@ -41,6 +41,14 @@ class EvaluationResult:
     verified_count: int = 0
     verification_rate: float = 0.0
 
+    # LLM-as-Judge aggregated metrics
+    mean_llm_judge_score: float = 0.0
+    mean_llm_correctness: float = 0.0
+    mean_llm_helpfulness: float = 0.0
+    mean_llm_faithfulness: float = 0.0
+    mean_llm_fluency: float = 0.0
+    llm_judge_model: str = ""
+
     # Category breakdown
     category_scores: dict[str, dict[str, float]] = field(default_factory=dict)
 
@@ -60,6 +68,14 @@ class EvaluationResult:
                 "std_similarity": self.std_similarity,
                 "std_bleu": self.std_bleu,
                 "std_latency_ms": self.std_latency_ms,
+            },
+            "llm_judge": {
+                "mean_score": self.mean_llm_judge_score,
+                "mean_correctness": self.mean_llm_correctness,
+                "mean_helpfulness": self.mean_llm_helpfulness,
+                "mean_faithfulness": self.mean_llm_faithfulness,
+                "mean_fluency": self.mean_llm_fluency,
+                "judge_model": self.llm_judge_model,
             },
             "verification": {
                 "verified_count": self.verified_count,
@@ -199,6 +215,14 @@ class EvaluationRunner:
         category_scores: dict[str, list[dict[str, float]]] = {}
         case_results = []
 
+        # LLM-judge scores
+        llm_judge_scores = []
+        llm_correctness_scores = []
+        llm_helpfulness_scores = []
+        llm_faithfulness_scores = []
+        llm_fluency_scores = []
+        llm_judge_model = ""
+
         for i, test_case in enumerate(test_cases):
             try:
                 metrics = self.run_single(test_case)
@@ -211,6 +235,14 @@ class EvaluationRunner:
                 if metrics.verified:
                     verified_count += 1
 
+                # Collect LLM-judge scores if available
+                if metrics.llm_judge_score > 0:
+                    llm_judge_scores.append(metrics.llm_judge_score)
+                    llm_correctness_scores.append(metrics.llm_correctness)
+                    llm_helpfulness_scores.append(metrics.llm_helpfulness)
+                    llm_faithfulness_scores.append(metrics.llm_faithfulness)
+                    llm_fluency_scores.append(metrics.llm_fluency)
+
                 # Track by category
                 cat = metrics.category or "unknown"
                 if cat not in category_scores:
@@ -219,6 +251,7 @@ class EvaluationRunner:
                     "similarity": metrics.answer_similarity,
                     "bleu": metrics.bleu_score,
                     "faithfulness": metrics.faithfulness,
+                    "llm_judge_score": metrics.llm_judge_score,
                 })
 
                 case_results.append(metrics.to_dict())
@@ -238,7 +271,14 @@ class EvaluationRunner:
                 "mean_similarity": float(np.mean([s["similarity"] for s in scores])),
                 "mean_bleu": float(np.mean([s["bleu"] for s in scores])),
                 "mean_faithfulness": float(np.mean([s["faithfulness"] for s in scores])),
+                "mean_llm_judge": float(np.mean([s["llm_judge_score"] for s in scores])),
             }
+
+        # Get LLM judge model name from evaluator if available
+        if self.evaluator and hasattr(self.evaluator, "llm_judge") and self.evaluator.llm_judge:
+            llm_judge_model = getattr(
+                self.evaluator.llm_judge.client, "model_name", ""
+            )
 
         # Build result
         n = len(similarities)
@@ -255,6 +295,13 @@ class EvaluationRunner:
             std_latency_ms=float(np.std(latencies)) if latencies else 0.0,
             verified_count=verified_count,
             verification_rate=verified_count / n if n > 0 else 0.0,
+            # LLM-judge aggregated metrics
+            mean_llm_judge_score=float(np.mean(llm_judge_scores)) if llm_judge_scores else 0.0,
+            mean_llm_correctness=float(np.mean(llm_correctness_scores)) if llm_correctness_scores else 0.0,
+            mean_llm_helpfulness=float(np.mean(llm_helpfulness_scores)) if llm_helpfulness_scores else 0.0,
+            mean_llm_faithfulness=float(np.mean(llm_faithfulness_scores)) if llm_faithfulness_scores else 0.0,
+            mean_llm_fluency=float(np.mean(llm_fluency_scores)) if llm_fluency_scores else 0.0,
+            llm_judge_model=llm_judge_model,
             category_scores=category_aggregated,
             case_results=case_results,
         )
@@ -263,6 +310,12 @@ class EvaluationRunner:
             f"Evaluation complete: similarity={result.mean_similarity:.3f}, "
             f"bleu={result.mean_bleu:.3f}, latency={result.mean_latency_ms:.1f}ms"
         )
+        if llm_judge_scores:
+            logger.info(
+                f"LLM-Judge: score={result.mean_llm_judge_score:.2f}/5, "
+                f"correctness={result.mean_llm_correctness:.2f}, "
+                f"helpfulness={result.mean_llm_helpfulness:.2f}"
+            )
 
         return result
 
