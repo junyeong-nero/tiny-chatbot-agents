@@ -1,4 +1,5 @@
 .claude/
+.serena/
 
 # Python-generated files
 __pycache__/
