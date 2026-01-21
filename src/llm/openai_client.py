@@ -90,7 +90,7 @@ class OpenAIClient(BaseLLMClient):
             response = self.client.chat.completions.create(
                 model=model or self.model,
                 messages=messages,  # type: ignore[arg-type]
-                temperature=temperature or self.temperature,
+                temperature=self.temperature if temperature is None else temperature,
                 max_tokens=max_tokens or self.max_tokens,
             )
 

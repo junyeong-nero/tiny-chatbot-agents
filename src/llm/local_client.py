@@ -137,7 +137,7 @@ class LocalLLMClient(BaseLLMClient):
             response = self.client.chat.completions.create(
                 model=model or self.model,
                 messages=messages,  # type: ignore[arg-type]
-                temperature=temperature or self.temperature,
+                temperature=self.temperature if temperature is None else temperature,
                 max_tokens=max_tokens or self.max_tokens,
             )
 
@@ -156,6 +156,24 @@ class LocalLLMClient(BaseLLMClient):
             )
 
         except Exception as e:
+            error_msg = str(e)
+            # Provide more helpful error messages for common issues
+            if "Connection refused" in error_msg or "Connection error" in error_msg.lower():
+                raise ConnectionError(
+                    f"{self.provider.value} server is not running at {self.base_url}. "
+                    f"Please start the server first. "
+                    f"For vLLM: python -m vllm.entrypoints.openai.api_server --model {self.model}"
+                ) from e
+            elif "timeout" in error_msg.lower():
+                raise TimeoutError(
+                    f"{self.provider.value} server timed out at {self.base_url}. "
+                    f"The model may be loading or the server is overloaded."
+                ) from e
+            elif "404" in error_msg or "not found" in error_msg.lower():
+                raise ValueError(
+                    f"Model '{model or self.model}' not found on {self.provider.value} server. "
+                    f"Check available models with: curl {self.base_url}/models"
+                ) from e
             logger.error(f"Local LLM API error ({self.provider.value}): {e}")
             raise
 
