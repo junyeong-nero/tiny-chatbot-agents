@@ -123,7 +123,11 @@ def main():
         "--model", "-m", type=str, help="Embedding model key"
     )
     parser.add_argument(
-        "--llm-model", type=str, default="gpt-4o-mini", help="OpenAI model"
+        "--llm-provider", type=str, default=None,
+        help="LLM provider: vllm, sglang, ollama, openai (default: from LLM_PROVIDER env or vllm)"
+    )
+    parser.add_argument(
+        "--llm-model", type=str, default=None, help="LLM model name"
     )
     parser.add_argument(
         "--verify", action="store_true", help="Enable hallucination verification"
@@ -138,13 +142,18 @@ def main():
     print("Initializing RAG Pipeline...")
 
     # Import here to avoid loading if just showing help
-    from src.llm import OpenAIClient
+    from src.llm import create_llm_client
 
     try:
-        llm = OpenAIClient(model=args.llm_model)
+        llm_kwargs = {}
+        if args.llm_model:
+            llm_kwargs["model"] = args.llm_model
+
+        llm = create_llm_client(provider=args.llm_provider, **llm_kwargs)
     except ValueError as e:
         print(f"Error: {e}")
-        print("Set OPENAI_API_KEY environment variable.")
+        print("Set LLM_PROVIDER env var (vllm, sglang, ollama, or openai for testing)")
+        print("For OpenAI testing, also set OPENAI_API_KEY")
         sys.exit(1)
 
     pipeline = RAGPipeline(
@@ -158,7 +167,7 @@ def main():
 
     print(f"  QnA documents: {pipeline.qna_store.count()}")
     print(f"  ToS documents: {pipeline.tos_store.count()}")
-    print(f"  LLM model: {args.llm_model}")
+    print(f"  LLM model: {llm.model}")
     print(f"  Verification: {'enabled' if args.verify else 'disabled'}")
 
     if args.query:
