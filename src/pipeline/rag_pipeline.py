@@ -37,6 +37,7 @@ class PipelineResponse:
     answer: str
     source: ResponseSource
     confidence: float
+    response_mode: str = "answer"
     context: list[dict[str, Any]] = field(default_factory=list)
     citations: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -51,6 +52,7 @@ class PipelineResponse:
             "answer": self.answer,
             "source": self.source.value,
             "confidence": self.confidence,
+            "response_mode": self.response_mode,
             "context": self.context,
             "citations": self.citations,
             "metadata": self.metadata,
@@ -81,6 +83,9 @@ class RAGPipeline:
 
     DEFAULT_QNA_THRESHOLD = 0.80
     DEFAULT_TOS_THRESHOLD = 0.65
+    DEFAULT_QNA_MID_THRESHOLD = 0.70
+    DEFAULT_TOS_MID_THRESHOLD = 0.55
+    DEFAULT_TOS_LOW_THRESHOLD = 0.40
     DEFAULT_VERIFICATION_THRESHOLD = 0.7
 
     def __init__(
@@ -94,6 +99,9 @@ class RAGPipeline:
         embedding_model: str | None = None,
         qna_threshold: float = DEFAULT_QNA_THRESHOLD,
         tos_threshold: float = DEFAULT_TOS_THRESHOLD,
+        qna_mid_threshold: float = DEFAULT_QNA_MID_THRESHOLD,
+        tos_mid_threshold: float = DEFAULT_TOS_MID_THRESHOLD,
+        tos_low_threshold: float = DEFAULT_TOS_LOW_THRESHOLD,
         enable_verification: bool = True,
         verification_threshold: float = DEFAULT_VERIFICATION_THRESHOLD,
         enable_hybrid_tos_search: bool = False,
@@ -110,6 +118,9 @@ class RAGPipeline:
             embedding_model: Embedding model key
             qna_threshold: Minimum score for QnA match
             tos_threshold: Minimum score for ToS retrieval
+            qna_mid_threshold: Mid-band score for QnA limited answer
+            tos_mid_threshold: Mid-band score for ToS limited answer
+            tos_low_threshold: Low-band score for ToS clarification
             enable_verification: Whether to enable hallucination verification
             verification_threshold: Minimum verification score to pass
             enable_hybrid_tos_search: Enable rule-based and triplet search for ToS
@@ -148,6 +159,16 @@ class RAGPipeline:
 
         self.qna_threshold = qna_threshold
         self.tos_threshold = tos_threshold
+        self.qna_mid_threshold = qna_mid_threshold
+        self.tos_mid_threshold = tos_mid_threshold
+        self.tos_low_threshold = tos_low_threshold
+
+        if not 0.0 <= self.qna_mid_threshold <= self.qna_threshold <= 1.0:
+            raise ValueError("qna_mid_threshold must be <= qna_threshold and within [0, 1]")
+        if not 0.0 <= self.tos_low_threshold <= self.tos_mid_threshold <= self.tos_threshold <= 1.0:
+            raise ValueError(
+                "tos_low_threshold must be <= tos_mid_threshold <= tos_threshold within [0, 1]"
+            )
 
         logger.info(
             f"RAG Pipeline initialized. "
@@ -198,6 +219,22 @@ class RAGPipeline:
 
         best = results[0]
         if best.score < self.qna_threshold:
+            if best.score >= self.qna_mid_threshold:
+                logger.info(
+                    f"QnA mid-band score {best.score:.3f} below threshold {self.qna_threshold}"
+                )
+                qna_limited = self._build_qna_limited_response(
+                    query=query, results=results, best=best
+                )
+                tos_response = self._try_tos(query)
+                if (
+                    tos_response
+                    and tos_response.source == ResponseSource.TOS
+                    and tos_response.response_mode in {"answer", "limited_answer"}
+                    and tos_response.confidence >= qna_limited.confidence
+                ):
+                    return tos_response
+                return qna_limited
             logger.debug(f"QnA score {best.score:.3f} below threshold {self.qna_threshold}")
             return None
 
@@ -233,6 +270,7 @@ class RAGPipeline:
             answer=response.content,
             source=ResponseSource.QNA,
             confidence=best.score,
+            response_mode="answer",
             context=[
                 {"question": r.question, "answer": r.answer, "score": r.score}
                 for r in results
@@ -243,6 +281,71 @@ class RAGPipeline:
                 "matched_question": best.question,
                 "category": best.category,
                 "sub_category": best.sub_category,
+                "llm_model": response.model,
+                "prompt_tokens": response.usage.get("prompt_tokens", 0),
+                "completion_tokens": response.usage.get("completion_tokens", 0),
+                "total_tokens": response.usage.get("total_tokens", 0),
+                "tokens_used": response.usage.get("total_tokens", 0),
+            },
+        )
+
+    def _build_qna_limited_response(
+        self,
+        query: str,
+        results: list[Any],
+        best: Any,
+    ) -> PipelineResponse:
+        context_parts = []
+        for r in results:
+            if r.score >= self.qna_mid_threshold * 0.9:
+                context_parts.append(f"Q: {r.question}\nA: {r.answer}")
+
+        if not context_parts:
+            context_parts.append(f"Q: {best.question}\nA: {best.answer}")
+
+        context_str = "\n\n".join(context_parts)
+
+        context_items = [
+            {"question": r.question, "answer": r.answer, "score": r.score}
+            for r in results
+            if r.score >= self.qna_mid_threshold * 0.9
+        ]
+        if not context_items:
+            context_items = [
+                {"question": best.question, "answer": best.answer, "score": best.score}
+            ]
+
+        system_prompt = """당신은 금융 서비스 고객 상담 AI입니다.
+
+FAQ에서 일부 유사한 항목이 발견되었지만 정확한 일치는 아닙니다.
+
+규칙:
+1. 제공된 FAQ 내용을 근거로 제한적으로 답변하세요.
+2. 확신이 없는 내용은 "확실하지 않습니다"라고 밝혀 주세요.
+3. 추가 정보가 필요하면 질문을 더 구체적으로 요청하세요.
+4. FAQ에 없는 내용은 지어내지 마세요."""
+
+        response = self.llm.generate_with_context(
+            query=query,
+            context=context_str,
+            system_prompt=system_prompt,
+        )
+
+        return PipelineResponse(
+            query=query,
+            answer=response.content,
+            source=ResponseSource.QNA,
+            confidence=best.score,
+            response_mode="limited_answer",
+            context=context_items,
+            citations=[f"FAQ: {best.question}"],
+            metadata={
+                "matched_question": best.question,
+                "category": best.category,
+                "sub_category": best.sub_category,
+                "confidence_band": "mid",
+                "qna_threshold": self.qna_threshold,
+                "qna_mid_threshold": self.qna_mid_threshold,
                 "llm_model": response.model,
                 "prompt_tokens": response.usage.get("prompt_tokens", 0),
                 "completion_tokens": response.usage.get("completion_tokens", 0),
@@ -281,8 +384,34 @@ class RAGPipeline:
 
             if not relevant:
                 best_score = hybrid_results[0].get(score_key, 0)
+                if best_score >= self.tos_mid_threshold:
+                    limited = [
+                        r for r in hybrid_results if r.get(score_key, 0) >= self.tos_mid_threshold
+                    ]
+                    return self._build_tos_response_from_hybrid(
+                        query=query,
+                        results=limited,
+                        section_match=section_match,
+                        limited=True,
+                    )
+                if best_score >= self.tos_low_threshold:
+                    logger.debug(
+                        f"ToS scores below mid threshold {self.tos_mid_threshold}. "
+                        f"Best: {best_score:.3f} (hybrid)"
+                    )
+                    return self._build_clarification_response(
+                        query=query,
+                        confidence=best_score,
+                        metadata={
+                            "confidence_band": "low",
+                            "tos_threshold": self.tos_threshold,
+                            "tos_mid_threshold": self.tos_mid_threshold,
+                            "tos_low_threshold": self.tos_low_threshold,
+                            "hybrid_search": True,
+                        },
+                    )
                 logger.debug(
-                    f"ToS scores below threshold {self.tos_threshold}. "
+                    f"ToS scores below low threshold {self.tos_low_threshold}. "
                     f"Best: {best_score:.3f} (hybrid)"
                 )
                 return None
@@ -291,6 +420,7 @@ class RAGPipeline:
                 query=query,
                 results=relevant,
                 section_match=section_match,
+                limited=False,
             )
 
         # Regular vector-only search
@@ -304,14 +434,50 @@ class RAGPipeline:
         relevant = [r for r in results if r.score >= self.tos_threshold]
 
         if not relevant:
+            best_score = results[0].score
+            if best_score >= self.tos_mid_threshold:
+                limited = [r for r in results if r.score >= self.tos_mid_threshold]
+                return self._build_tos_response(
+                    query=query,
+                    results=limited,
+                    section_match=section_match,
+                    limited=True,
+                )
+            if best_score >= self.tos_low_threshold:
+                logger.debug(
+                    f"ToS scores below mid threshold {self.tos_mid_threshold}. Best: {best_score:.3f}"
+                )
+                return self._build_clarification_response(
+                    query=query,
+                    confidence=best_score,
+                    metadata={
+                        "confidence_band": "low",
+                        "tos_threshold": self.tos_threshold,
+                        "tos_mid_threshold": self.tos_mid_threshold,
+                        "tos_low_threshold": self.tos_low_threshold,
+                    },
+                )
             logger.debug(
-                f"ToS scores below threshold {self.tos_threshold}. Best: {results[0].score:.3f}"
+                f"ToS scores below low threshold {self.tos_low_threshold}. Best: {best_score:.3f}"
             )
             return None
 
-        # Build context from ToS sections
+        return self._build_tos_response(
+            query=query,
+            results=relevant,
+            section_match=section_match,
+            limited=False,
+        )
+
+    def _build_tos_response(
+        self,
+        query: str,
+        results: list[Any],
+        section_match: str | None,
+        limited: bool,
+    ) -> PipelineResponse:
         context_parts = []
-        for r in relevant:
+        for r in results:
             section_text = f"[{r.document_title}]\n"
             if r.section_title:
                 section_text += f"{r.section_title}\n"
@@ -320,8 +486,19 @@ class RAGPipeline:
 
         context_str = "\n\n---\n\n".join(context_parts)
 
-        # Generate answer using LLM with ToS context
-        system_prompt = """당신은 금융 서비스 약관 전문 상담 AI입니다.
+        if limited:
+            system_prompt = """당신은 금융 서비스 약관 전문 상담 AI입니다.
+
+관련 조항이 부분적으로 매칭되었지만 확실하지 않습니다.
+
+규칙:
+1. 제공된 약관 내용만을 근거로 제한적으로 답변하세요.
+2. 불확실한 부분은 명시하고 단정하지 마세요.
+3. 약관에 없는 내용은 지어내지 마세요.
+4. 답변 마지막에 참조한 약관/조항을 명시하세요. 예: [참조: OO약관 제N조]
+5. 추가로 필요한 정보나 정확한 조항을 요청하세요."""
+        else:
+            system_prompt = """당신은 금융 서비스 약관 전문 상담 AI입니다.
 
 제공된 약관 내용을 바탕으로 고객 질문에 답변합니다.
 
@@ -338,35 +515,55 @@ class RAGPipeline:
             system_prompt=system_prompt,
         )
 
-        # Extract citations from answer
         citations = self._extract_citations(response.content)
         if not citations:
-            citations = [f"{r.document_title} - {r.section_title}" for r in relevant[:2]]
+            citations = [f"{r.document_title} - {r.section_title}" for r in results[:2]]
 
-        avg_score = sum(r.score for r in relevant) / len(relevant)
-        logger.info(f"ToS context found with avg score {avg_score:.3f}")
+        avg_score = sum(r.score for r in results) / len(results)
+        logger.info(
+            f"ToS context found with avg score {avg_score:.3f}{' (limited)' if limited else ''}"
+        )
 
-        # Build context for verification
         verification_context = [
             {
                 "section_title": r.section_title,
                 "section_content": r.section_content,
             }
-            for r in relevant
+            for r in results
         ]
 
-        # Verify answer
         verification_result = self._verify_answer(
             question=query,
             answer=response.content,
             context=verification_context,
         )
 
+        metadata = {
+            "section_reference": section_match,
+            "llm_model": response.model,
+            "prompt_tokens": response.usage.get("prompt_tokens", 0),
+            "completion_tokens": response.usage.get("completion_tokens", 0),
+            "total_tokens": response.usage.get("total_tokens", 0),
+            "tokens_used": response.usage.get("total_tokens", 0),
+            "verification_reasoning": verification_result.reasoning
+            if verification_result
+            else None,
+        }
+        if limited:
+            metadata.update(
+                {
+                    "confidence_band": "mid",
+                    "tos_threshold": self.tos_threshold,
+                    "tos_mid_threshold": self.tos_mid_threshold,
+                }
+            )
+
         return PipelineResponse(
             query=query,
             answer=response.content,
             source=ResponseSource.TOS,
             confidence=avg_score,
+            response_mode="limited_answer" if limited else "answer",
             context=[
                 {
                     "document_title": r.document_title,
@@ -374,20 +571,10 @@ class RAGPipeline:
                     "section_content": r.section_content[:500],
                     "score": r.score,
                 }
-                for r in relevant
+                for r in results
             ],
             citations=citations,
-            metadata={
-                "section_reference": section_match,
-                "llm_model": response.model,
-                "prompt_tokens": response.usage.get("prompt_tokens", 0),
-                "completion_tokens": response.usage.get("completion_tokens", 0),
-                "total_tokens": response.usage.get("total_tokens", 0),
-                "tokens_used": response.usage.get("total_tokens", 0),
-                "verification_reasoning": verification_result.reasoning
-                if verification_result
-                else None,
-            },
+            metadata=metadata,
             verified=verification_result.verified if verification_result else True,
             verification_score=verification_result.confidence if verification_result else 1.0,
             verification_issues=verification_result.issues if verification_result else [],
@@ -398,6 +585,7 @@ class RAGPipeline:
         query: str,
         results: list[dict[str, Any]],
         section_match: str | None,
+        limited: bool = False,
     ) -> PipelineResponse:
         """Build ToS response from hybrid search results.
 
@@ -420,8 +608,19 @@ class RAGPipeline:
 
         context_str = "\n\n---\n\n".join(context_parts)
 
-        # Generate answer using LLM with ToS context
-        system_prompt = """당신은 금융 서비스 약관 전문 상담 AI입니다.
+        if limited:
+            system_prompt = """당신은 금융 서비스 약관 전문 상담 AI입니다.
+
+관련 조항이 부분적으로 매칭되었지만 확실하지 않습니다.
+
+규칙:
+1. 제공된 약관 내용만을 근거로 제한적으로 답변하세요.
+2. 불확실한 부분은 명시하고 단정하지 마세요.
+3. 약관에 없는 내용은 지어내지 마세요.
+4. 답변 마지막에 참조한 약관/조항을 명시하세요. 예: [참조: OO약관 제N조]
+5. 추가로 필요한 정보나 정확한 조항을 요청하세요."""
+        else:
+            system_prompt = """당신은 금융 서비스 약관 전문 상담 AI입니다.
 
 제공된 약관 내용을 바탕으로 고객 질문에 답변합니다.
 
@@ -451,7 +650,10 @@ class RAGPipeline:
         else:
             score_key = "combined_score" if "combined_score" in results[0] else "score"
         avg_score = sum(r.get(score_key, 0) for r in results) / len(results)
-        logger.info(f"ToS context found with avg score {avg_score:.3f} (hybrid)")
+        logger.info(
+            f"ToS context found with avg score {avg_score:.3f} (hybrid)"
+            f"{' (limited)' if limited else ''}"
+        )
 
         # Build context for verification
         verification_context = [
@@ -476,11 +678,35 @@ class RAGPipeline:
             matched_keywords.extend(r.get("matched_keywords", []))
             matched_triplets.extend(r.get("matched_triplets", []))
 
+        metadata = {
+            "section_reference": section_match,
+            "llm_model": response.model,
+            "prompt_tokens": response.usage.get("prompt_tokens", 0),
+            "completion_tokens": response.usage.get("completion_tokens", 0),
+            "total_tokens": response.usage.get("total_tokens", 0),
+            "tokens_used": response.usage.get("total_tokens", 0),
+            "verification_reasoning": verification_result.reasoning
+            if verification_result
+            else None,
+            "hybrid_search": True,
+            "matched_keywords": list(set(matched_keywords)),
+            "matched_triplets": matched_triplets[:5],
+        }
+        if limited:
+            metadata.update(
+                {
+                    "confidence_band": "mid",
+                    "tos_threshold": self.tos_threshold,
+                    "tos_mid_threshold": self.tos_mid_threshold,
+                }
+            )
+
         return PipelineResponse(
             query=query,
             answer=response.content,
             source=ResponseSource.TOS,
             confidence=avg_score,
+            response_mode="limited_answer" if limited else "answer",
             context=[
                 {
                     "document_title": r.get("document_title", ""),
@@ -496,23 +722,48 @@ class RAGPipeline:
                 for r in results
             ],
             citations=citations,
+            metadata=metadata,
+            verified=verification_result.verified if verification_result else True,
+            verification_score=verification_result.confidence if verification_result else 1.0,
+            verification_issues=verification_result.issues if verification_result else [],
+        )
+
+    def _build_clarification_response(
+        self,
+        query: str,
+        confidence: float,
+        metadata: dict[str, Any] | None = None,
+    ) -> PipelineResponse:
+        system_prompt = """당신은 금융 서비스 고객 상담 AI입니다.
+
+규칙:
+1. 현재 정보로는 정확한 답변이 어렵다고 안내하세요.
+2. 정확한 답변에 필요한 추가 정보를 1-2개 질문하세요.
+3. 필요 시 상담원 연결 안내를 포함하세요.
+4. 간결하고 정중하게 작성하세요."""
+
+        response = self.llm.generate_with_context(
+            query=query,
+            context="관련 근거가 부족합니다.",
+            system_prompt=system_prompt,
+        )
+
+        return PipelineResponse(
+            query=query,
+            answer=response.content,
+            source=ResponseSource.NO_CONTEXT,
+            confidence=confidence,
+            response_mode="clarification",
+            context=[],
+            citations=[],
             metadata={
-                "section_reference": section_match,
+                **(metadata or {}),
                 "llm_model": response.model,
                 "prompt_tokens": response.usage.get("prompt_tokens", 0),
                 "completion_tokens": response.usage.get("completion_tokens", 0),
                 "total_tokens": response.usage.get("total_tokens", 0),
                 "tokens_used": response.usage.get("total_tokens", 0),
-                "verification_reasoning": verification_result.reasoning
-                if verification_result
-                else None,
-                "hybrid_search": True,
-                "matched_keywords": list(set(matched_keywords)),
-                "matched_triplets": matched_triplets[:5],  # Limit triplets shown
             },
-            verified=verification_result.verified if verification_result else True,
-            verification_score=verification_result.confidence if verification_result else 1.0,
-            verification_issues=verification_result.issues if verification_result else [],
         )
 
     def _answer_without_context(self, query: str) -> PipelineResponse:
@@ -544,6 +795,7 @@ class RAGPipeline:
             answer=response.content,
             source=ResponseSource.NO_CONTEXT,
             confidence=0.0,
+            response_mode="handoff",
             context=[],
             citations=[],
             metadata={

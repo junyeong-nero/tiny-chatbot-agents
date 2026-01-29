@@ -362,9 +362,14 @@ models:
 |----------|--------|------|
 | `qna_threshold` | 0.80 | QnA 매칭 최소 유사도 |
 | `tos_threshold` | 0.65 | ToS 검색 최소 유사도 |
+| `qna_mid_threshold` | 0.70 | QnA 제한 답변/재질문 분기 기준 |
+| `tos_mid_threshold` | 0.55 | ToS 제한 답변/재질문 분기 기준 |
+| `tos_low_threshold` | 0.40 | ToS 재질문/상담원 연결 분기 기준 |
 | `enable_hybrid_tos_search` | False | ToS 하이브리드 검색 활성화 |
 | `enable_verification` | True | Hallucination 검증 활성화 |
 | `verification_threshold` | 0.70 | 검증 통과 최소 신뢰도 |
+
+중간 임계값 구간에서는 근거 제한 답변 또는 재질문을 우선하며, 근거 부족 시 상담원 연결 안내로 전환됩니다.
 
 ### ToS 하이브리드 검색
 

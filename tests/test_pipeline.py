@@ -1,12 +1,8 @@
 """Tests for RAG Pipeline."""
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import Mock, patch
-
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.pipeline.rag_pipeline import RAGPipeline, PipelineResponse, ResponseSource
 
@@ -86,9 +82,7 @@ class TestRAGPipeline:
 
     def test_qna_below_threshold_fallback_to_tos(self, mock_qna_store, mock_tos_store, mock_llm):
         """QnA score가 threshold 미만이면 ToS로 fallback."""
-        mock_qna_store.search.return_value = [
-            MockQnAResult("관련없는 질문", "관련없는 답변", 0.50)
-        ]
+        mock_qna_store.search.return_value = [MockQnAResult("관련없는 질문", "관련없는 답변", 0.50)]
         mock_tos_store.search.return_value = [
             MockToSResult("이용약관", "제1조 (목적)", "본 약관은...", 0.75)
         ]
@@ -104,6 +98,136 @@ class TestRAGPipeline:
         response = pipeline.query("제1조에 대해 알려주세요")
 
         assert response.source == ResponseSource.TOS
+
+    def test_qna_mid_band_returns_limited(self, mock_qna_store, mock_tos_store, mock_llm):
+        """QnA score가 mid band면 제한 답변 반환."""
+        mock_qna_store.search.return_value = [
+            MockQnAResult("비밀번호 변경 방법", "설정에서 변경 가능합니다.", 0.80)
+        ]
+        mock_tos_store.search.return_value = []
+
+        pipeline = RAGPipeline(
+            llm=mock_llm,
+            qna_store=mock_qna_store,
+            tos_store=mock_tos_store,
+            qna_threshold=0.85,
+            qna_mid_threshold=0.75,
+            tos_threshold=0.65,
+            tos_mid_threshold=0.55,
+            tos_low_threshold=0.40,
+        )
+
+        response = pipeline.query("비밀번호 어떻게 바꿔요?")
+
+        assert response.source == ResponseSource.QNA
+        assert response.response_mode == "limited_answer"
+
+    def test_qna_mid_band_prefers_strong_tos(self, mock_qna_store, mock_tos_store, mock_llm):
+        """QnA mid band면 ToS가 더 강할 때 ToS 선택."""
+        mock_qna_store.search.return_value = [MockQnAResult("유사 질문", "유사 답변", 0.78)]
+        mock_tos_store.search.return_value = [
+            MockToSResult("이용약관", "제1조 (목적)", "본 약관은...", 0.90)
+        ]
+
+        pipeline = RAGPipeline(
+            llm=mock_llm,
+            qna_store=mock_qna_store,
+            tos_store=mock_tos_store,
+            qna_threshold=0.85,
+            qna_mid_threshold=0.75,
+            tos_threshold=0.65,
+            tos_mid_threshold=0.55,
+            tos_low_threshold=0.40,
+        )
+
+        response = pipeline.query("제1조에 대해 알려주세요")
+
+        assert response.source == ResponseSource.TOS
+        assert response.response_mode in {"answer", "limited_answer"}
+
+    def test_tos_mid_band_returns_limited(self, mock_qna_store, mock_tos_store, mock_llm):
+        """ToS score가 mid band면 제한 답변 반환."""
+        mock_qna_store.search.return_value = []
+        mock_tos_store.search.return_value = [
+            MockToSResult("이용약관", "제1조 (목적)", "본 약관은...", 0.58)
+        ]
+
+        pipeline = RAGPipeline(
+            llm=mock_llm,
+            qna_store=mock_qna_store,
+            tos_store=mock_tos_store,
+            tos_threshold=0.65,
+            tos_mid_threshold=0.55,
+            tos_low_threshold=0.40,
+        )
+
+        response = pipeline.query("제1조에 대해 알려주세요")
+
+        assert response.source == ResponseSource.TOS
+        assert response.response_mode == "limited_answer"
+
+    def test_tos_low_band_returns_clarification(self, mock_qna_store, mock_tos_store, mock_llm):
+        """ToS score가 low band면 재질문 응답 반환."""
+        mock_qna_store.search.return_value = []
+        mock_tos_store.search.return_value = [
+            MockToSResult("이용약관", "제1조 (목적)", "본 약관은...", 0.45)
+        ]
+
+        pipeline = RAGPipeline(
+            llm=mock_llm,
+            qna_store=mock_qna_store,
+            tos_store=mock_tos_store,
+            tos_threshold=0.65,
+            tos_mid_threshold=0.55,
+            tos_low_threshold=0.40,
+        )
+
+        response = pipeline.query("제1조에 대해 알려주세요")
+
+        assert response.source == ResponseSource.NO_CONTEXT
+        assert response.response_mode == "clarification"
+
+    def test_tos_below_low_falls_back_to_handoff(self, mock_qna_store, mock_tos_store, mock_llm):
+        """ToS score가 low threshold 미만이면 handoff fallback."""
+        mock_qna_store.search.return_value = []
+        mock_tos_store.search.return_value = [
+            MockToSResult("이용약관", "제1조 (목적)", "본 약관은...", 0.20)
+        ]
+
+        pipeline = RAGPipeline(
+            llm=mock_llm,
+            qna_store=mock_qna_store,
+            tos_store=mock_tos_store,
+            tos_threshold=0.65,
+            tos_mid_threshold=0.55,
+            tos_low_threshold=0.40,
+        )
+
+        response = pipeline.query("제1조에 대해 알려주세요")
+
+        assert response.source == ResponseSource.NO_CONTEXT
+        assert response.response_mode == "handoff"
+
+    def test_invalid_thresholds_raise(self, mock_qna_store, mock_tos_store, mock_llm):
+        """임계값 순서가 올바르지 않으면 ValueError."""
+        with pytest.raises(ValueError):
+            RAGPipeline(
+                llm=mock_llm,
+                qna_store=mock_qna_store,
+                tos_store=mock_tos_store,
+                qna_threshold=0.80,
+                qna_mid_threshold=0.90,
+            )
+
+        with pytest.raises(ValueError):
+            RAGPipeline(
+                llm=mock_llm,
+                qna_store=mock_qna_store,
+                tos_store=mock_tos_store,
+                tos_threshold=0.65,
+                tos_mid_threshold=0.50,
+                tos_low_threshold=0.60,
+            )
 
     def test_no_context_found(self, mock_qna_store, mock_tos_store, mock_llm):
         """QnA와 ToS 모두 결과 없으면 NO_CONTEXT."""
@@ -169,7 +293,6 @@ class TestRAGPipeline:
         assert len(results) == 1
         assert results[0]["section_title"] == "제1조"
 
-
     def test_tos_response_includes_verification(self, mock_qna_store, mock_tos_store, mock_llm):
         """ToS 응답에 verification 결과가 포함되는지 테스트."""
         mock_qna_store.search.return_value = []
@@ -225,6 +348,7 @@ class TestPipelineResponse:
             answer="answer",
             source=ResponseSource.QNA,
             confidence=0.9,
+            response_mode="answer",
             context=[{"q": "test"}],
             citations=["ref"],
             metadata={"key": "value"},
@@ -235,6 +359,7 @@ class TestPipelineResponse:
         assert d["query"] == "test"
         assert d["source"] == "qna"
         assert d["confidence"] == 0.9
+        assert d["response_mode"] == "answer"
 
     def test_to_dict_includes_verification(self):
         """PipelineResponse to_dict에 verification 필드 포함 테스트."""
