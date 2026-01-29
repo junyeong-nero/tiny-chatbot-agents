@@ -246,5 +246,207 @@ class TestQnASearchResult:
         assert d["id"] == "test-id"
 
 
+class TestHumanAgentBackfill:
+    @pytest.fixture
+    def backfill(self, tmp_path, mock_config):
+        with patch("src.vectorstore.embeddings.SentenceTransformer") as MockModel:
+            MockModel.return_value = create_mock_embedding_fn()
+
+            from src.vectorstore import HumanAgentBackfill
+
+            bf = HumanAgentBackfill(
+                persist_directory=tmp_path / "test_vectordb",
+                embedding_model="test-model",
+            )
+            yield bf
+
+    def test_add_agent_answer(self, backfill):
+        qna_id = backfill.add_agent_answer(
+            question="계좌 해지 방법이 뭐야?",
+            answer="고객센터 또는 앱에서 해지 신청 가능합니다.",
+            category="계좌",
+        )
+
+        assert qna_id is not None
+        assert backfill.qna_store.count() == 1
+
+        result = backfill.qna_store.get_by_id(qna_id)
+        assert result is not None
+        assert result.source == "human_agent"
+
+    def test_add_agent_answer_with_session_id(self, backfill):
+        qna_id = backfill.add_agent_answer(
+            question="환불 가능한가요?",
+            answer="7일 이내 가능합니다.",
+            category="환불",
+            agent_id="agent_001",
+            session_id="sess_12345",
+        )
+
+        assert qna_id is not None
+        result = backfill.qna_store.get_by_id(qna_id)
+        assert result is not None
+        assert result.source == "human_agent"
+
+    def test_add_agent_answers_batch(self, backfill):
+        items = [
+            {"question": "질문1", "answer": "답변1", "category": "카테고리1"},
+            {"question": "질문2", "answer": "답변2", "category": "카테고리2"},
+            {"question": "질문3", "answer": "답변3", "category": "카테고리3"},
+        ]
+
+        result = backfill.add_agent_answers_batch(items)
+
+        assert result.success is True
+        assert result.added_count == 3
+        assert result.skipped_count == 0
+        assert len(result.errors) == 0
+        assert backfill.qna_store.count() == 3
+
+    def test_add_agent_answers_batch_skips_empty(self, backfill):
+        items = [
+            {"question": "질문1", "answer": "답변1"},
+            {"question": "", "answer": "답변2"},
+            {"question": "질문3", "answer": ""},
+        ]
+
+        result = backfill.add_agent_answers_batch(items)
+
+        assert result.added_count == 1
+        assert result.skipped_count == 2
+        assert backfill.qna_store.count() == 1
+
+    def test_load_from_json(self, backfill, tmp_path):
+        json_data = [
+            {
+                "question": "계좌 해지 방법이 뭐야?",
+                "answer": "고객센터 또는 앱에서 해지 신청 가능합니다.",
+                "category": "계좌",
+                "agent_id": "agent_001",
+                "session_id": "sess_12345",
+            },
+            {
+                "question": "환불 가능한가요?",
+                "answer": "7일 이내 가능합니다.",
+                "category": "환불",
+            },
+        ]
+
+        json_path = tmp_path / "agent_answers.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(json_data, f, ensure_ascii=False)
+
+        result = backfill.load_from_json(json_path)
+
+        assert result.success is True
+        assert result.added_count == 2
+        assert backfill.qna_store.count() == 2
+
+    def test_load_from_json_file_not_found(self, backfill, tmp_path):
+        result = backfill.load_from_json(tmp_path / "nonexistent.json")
+
+        assert result.success is False
+        assert len(result.errors) == 1
+        assert "찾을 수 없습니다" in result.errors[0]
+
+    def test_load_from_json_invalid_json(self, backfill, tmp_path):
+        json_path = tmp_path / "invalid.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            f.write("not valid json")
+
+        result = backfill.load_from_json(json_path)
+
+        assert result.success is False
+        assert len(result.errors) == 1
+
+    def test_load_from_json_not_array(self, backfill, tmp_path):
+        json_path = tmp_path / "not_array.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump({"question": "test", "answer": "test"}, f)
+
+        result = backfill.load_from_json(json_path)
+
+        assert result.success is False
+        assert "배열이 아닙니다" in result.errors[0]
+
+    def test_search_existing(self, backfill):
+        backfill.add_agent_answer(
+            question="계좌 해지 방법",
+            answer="앱에서 해지 신청하세요.",
+            category="계좌",
+        )
+
+        results = backfill.search_existing(
+            question="계좌 해지",
+            n_results=3,
+            score_threshold=0.0,
+        )
+
+        assert len(results) >= 1
+        assert "question" in results[0]
+        assert "answer" in results[0]
+
+    def test_add_if_not_duplicate_new(self, backfill):
+        qna_id, is_dup = backfill.add_if_not_duplicate(
+            question="새로운 질문입니다",
+            answer="새로운 답변입니다",
+            category="테스트",
+            duplicate_threshold=0.90,
+        )
+
+        assert qna_id is not None
+        assert is_dup is False
+        assert backfill.qna_store.count() == 1
+
+    def test_add_if_not_duplicate_existing(self, backfill):
+        backfill.add_agent_answer(
+            question="중복 질문",
+            answer="기존 답변",
+            category="테스트",
+        )
+
+        qna_id, is_dup = backfill.add_if_not_duplicate(
+            question="중복 질문",
+            answer="새 답변",
+            category="테스트",
+            duplicate_threshold=0.0,
+        )
+
+        assert qna_id is None
+        assert is_dup is True
+        assert backfill.qna_store.count() == 1
+
+    def test_get_stats(self, backfill):
+        backfill.add_agent_answer(
+            question="테스트 질문",
+            answer="테스트 답변",
+        )
+
+        stats = backfill.get_stats()
+
+        assert "total_entries" in stats
+        assert stats["total_entries"] == 1
+
+
+class TestBackfillResult:
+    def test_str_representation(self):
+        from src.vectorstore import BackfillResult
+
+        result = BackfillResult(
+            success=True,
+            added_count=5,
+            skipped_count=2,
+            errors=[],
+            added_ids=["id1", "id2", "id3", "id4", "id5"],
+        )
+
+        str_repr = str(result)
+
+        assert "success=True" in str_repr
+        assert "added=5" in str_repr
+        assert "skipped=2" in str_repr
+        assert "errors=0" in str_repr
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
