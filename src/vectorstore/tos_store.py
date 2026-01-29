@@ -90,16 +90,18 @@ class ToSChunker:
                         chunks.append(chunk)
 
         if not chunks and tos_item.get("content"):
-            chunks.append({
-                "section_title": document_title,
-                "section_content": tos_item["content"][:self.max_chunk_length],
-                "document_title": document_title,
-                "category": category,
-                "parent_content": "",
-                "effective_date": effective_date,
-                "source_url": source_url,
-                "crawled_at": crawled_at,
-            })
+            chunks.append(
+                {
+                    "section_title": document_title,
+                    "section_content": tos_item["content"][: self.max_chunk_length],
+                    "document_title": document_title,
+                    "category": category,
+                    "parent_content": "",
+                    "effective_date": effective_date,
+                    "source_url": source_url,
+                    "crawled_at": crawled_at,
+                }
+            )
 
         return chunks
 
@@ -129,7 +131,7 @@ class ToSChunker:
 
         return {
             "section_title": title,
-            "section_content": content[:self.max_chunk_length],
+            "section_content": content[: self.max_chunk_length],
             "document_title": document_title,
             "category": category,
             "parent_content": parent_content[:500],
@@ -153,10 +155,12 @@ class ToSChunker:
             match = self.SECTION_PATTERN.match(line)
             if match:
                 if current_section:
-                    sections.append({
-                        "title": current_section,
-                        "content": "\n".join(current_content),
-                    })
+                    sections.append(
+                        {
+                            "title": current_section,
+                            "content": "\n".join(current_content),
+                        }
+                    )
 
                 current_section = line
                 current_content = []
@@ -164,10 +168,12 @@ class ToSChunker:
                 current_content.append(line)
 
         if current_section:
-            sections.append({
-                "title": current_section,
-                "content": "\n".join(current_content),
-            })
+            sections.append(
+                {
+                    "title": current_section,
+                    "content": "\n".join(current_content),
+                }
+            )
 
         return sections
 
@@ -245,7 +251,6 @@ class ToSVectorStore:
             )
         return self._hybrid_search
 
-
     def add_tos_document(self, tos_item: dict[str, Any]) -> list[str]:
         chunks = self.chunker.chunk_document(tos_item)
         return self._add_chunks(chunks)
@@ -269,9 +274,12 @@ class ToSVectorStore:
         batch_size: int = 50,
     ) -> list[str]:
         all_ids = []
+        seen_ids: set[str] = set()
+        skipped_duplicates = 0
+        skipped_existing = 0
 
         for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
+            batch = chunks[i : i + batch_size]
 
             ids = []
             documents = []
@@ -289,30 +297,52 @@ class ToSVectorStore:
                     f"{chunk['document_title']}_{section_title}_{section_content[:100]}_{chunk['crawled_at']}".encode()
                 ).hexdigest()[:16]
 
+                if chunk_id in seen_ids:
+                    skipped_duplicates += 1
+                    continue
+
+                seen_ids.add(chunk_id)
+
                 ids.append(chunk_id)
                 documents.append(embed_text)
-                metadatas.append({
-                    "section_title": section_title,
-                    "section_content": section_content[:1000],
-                    "document_title": chunk.get("document_title", ""),
-                    "category": chunk.get("category", ""),
-                    "parent_content": chunk.get("parent_content", ""),
-                    "effective_date": chunk.get("effective_date", ""),
-                    "source_url": chunk.get("source_url", ""),
-                    "crawled_at": chunk.get("crawled_at", ""),
-                })
+                metadatas.append(
+                    {
+                        "section_title": section_title,
+                        "section_content": section_content[:1000],
+                        "document_title": chunk.get("document_title", ""),
+                        "category": chunk.get("category", ""),
+                        "parent_content": chunk.get("parent_content", ""),
+                        "effective_date": chunk.get("effective_date", ""),
+                        "source_url": chunk.get("source_url", ""),
+                        "crawled_at": chunk.get("crawled_at", ""),
+                    }
+                )
 
             if ids:
-                self.collection.add(
-                    ids=ids,
-                    documents=documents,
-                    metadatas=metadatas,
-                )
-                all_ids.extend(ids)
+                existing = self.collection.get(ids=ids)
+                existing_ids = set(existing["ids"])
+                skipped_existing += len(existing_ids)
+                filtered = [
+                    (cid, doc, meta)
+                    for cid, doc, meta in zip(ids, documents, metadatas, strict=False)
+                    if cid not in existing_ids
+                ]
+                if filtered:
+                    filtered_ids, filtered_docs, filtered_metas = zip(*filtered, strict=False)
+                    self.collection.add(
+                        ids=list(filtered_ids),
+                        documents=list(filtered_docs),
+                        metadatas=list(filtered_metas),
+                    )
+                    all_ids.extend(filtered_ids)
 
             logger.info(f"Added batch {i // batch_size + 1}: {len(ids)} chunks")
 
         logger.info(f"Total added: {len(all_ids)} chunks")
+        if skipped_duplicates:
+            logger.warning(f"Skipped duplicate chunk IDs: {skipped_duplicates}")
+        if skipped_existing:
+            logger.warning(f"Skipped existing chunk IDs: {skipped_existing}")
         return all_ids
 
     def search(
@@ -396,8 +426,7 @@ class ToSVectorStore:
     def load_from_json(self, json_path: str | Path) -> list[str]:
         json_path = Path(json_path)
 
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = json.loads(json_path.read_text(encoding="utf-8"))
 
         logger.info(f"Loading {len(data)} ToS documents from {json_path}")
         return self.add_tos_batch(data)

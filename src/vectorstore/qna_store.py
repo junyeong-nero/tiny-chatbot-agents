@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import chromadb
 from chromadb.config import Settings
@@ -59,6 +59,8 @@ class QnAVectorStore:
     - category: Question category
     - created_at: Timestamp
     - human_verified: Whether verified by human
+    - agent_id: Optional agent identifier (human-in-the-loop)
+    - session_id: Optional session identifier for traceability
 
     Attributes:
         collection: ChromaDB collection for QnA data
@@ -116,6 +118,8 @@ class QnAVectorStore:
         source_url: str = "",
         human_verified: bool = True,
         created_at: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
         qna_id: str | None = None,
     ) -> str:
         """Add a single QnA entry to the store.
@@ -129,6 +133,8 @@ class QnAVectorStore:
             source_url: Original URL source
             human_verified: Whether the answer is verified by human
             created_at: Timestamp string (auto-generated if None)
+            agent_id: Optional agent identifier (human-in-the-loop)
+            session_id: Optional session identifier for traceability
             qna_id: Unique ID (auto-generated if None)
 
         Returns:
@@ -151,6 +157,11 @@ class QnAVectorStore:
             "human_verified": human_verified,
             "created_at": created_at,
         }
+
+        if agent_id is not None:
+            metadata["agent_id"] = agent_id
+        if session_id is not None:
+            metadata["session_id"] = session_id
 
         # Add to collection - question is embedded, answer stored in metadata
         self.collection.add(
@@ -205,17 +216,24 @@ class QnAVectorStore:
 
                 ids.append(qna_id)
                 documents.append(question)
-                metadatas.append(
-                    {
-                        "answer": answer,
-                        "category": item.get("category", ""),
-                        "sub_category": item.get("sub_category", ""),
-                        "source": item.get("source", "FAQ"),
-                        "source_url": item.get("source_url", ""),
-                        "human_verified": item.get("human_verified", True),
-                        "created_at": created_at,
-                    }
-                )
+                metadata = {
+                    "answer": answer,
+                    "category": item.get("category", ""),
+                    "sub_category": item.get("sub_category", ""),
+                    "source": item.get("source", "FAQ"),
+                    "source_url": item.get("source_url", ""),
+                    "human_verified": item.get("human_verified", True),
+                    "created_at": created_at,
+                }
+
+                agent_id = item.get("agent_id")
+                session_id = item.get("session_id")
+                if agent_id is not None:
+                    metadata["agent_id"] = agent_id
+                if session_id is not None:
+                    metadata["session_id"] = session_id
+
+                metadatas.append(metadata)
 
             if ids:
                 self.collection.add(
@@ -344,8 +362,7 @@ class QnAVectorStore:
         """
         json_path = Path(json_path)
 
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = json.loads(json_path.read_text(encoding="utf-8"))
 
         logger.info(f"Loading {len(data)} QnA items from {json_path}")
         return self.add_qna_batch(data)
