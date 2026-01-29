@@ -152,14 +152,63 @@ class EvaluationRunner:
         context = []
         input_tokens = 0
         output_tokens = 0
+        input_tokens_int = 0
+        output_tokens_int = 0
 
         if self.pipeline:
             try:
                 response = self.pipeline.query(question)
-                generated = response.get("answer", "")
-                context = response.get("context", [])
-                input_tokens = response.get("input_tokens", 0)
-                output_tokens = response.get("output_tokens", 0)
+                if isinstance(response, dict):
+                    generated = response.get("answer", "")
+                    context = response.get("context", [])
+                    raw_metadata = response.get("metadata")
+                    metadata: dict[str, Any] = {}
+                    if isinstance(raw_metadata, dict):
+                        metadata = raw_metadata
+                    input_tokens = response.get("input_tokens")
+                    if input_tokens is None:
+                        input_tokens = metadata.get(
+                            "prompt_tokens", metadata.get("input_tokens", 0)
+                        )
+                    if input_tokens is None:
+                        input_tokens = 0
+
+                    output_tokens = response.get("output_tokens")
+                    if output_tokens is None:
+                        output_tokens = response.get("completion_tokens")
+
+                    if output_tokens is None:
+                        completion_tokens = metadata.get("completion_tokens")
+                        total_tokens = metadata.get("total_tokens", metadata.get("tokens_used"))
+                        if completion_tokens is not None:
+                            output_tokens = completion_tokens
+                        elif total_tokens is not None:
+                            safe_input = (
+                                int(input_tokens) if isinstance(input_tokens, (int, float)) else 0
+                            )
+                            safe_total = (
+                                int(total_tokens) if isinstance(total_tokens, (int, float)) else 0
+                            )
+                            output_tokens = max(0, safe_total - safe_input)
+                        else:
+                            output_tokens = 0
+
+                    if output_tokens is None:
+                        output_tokens = 0
+                else:
+                    generated = response.answer
+                    context = response.context
+                    raw_metadata = getattr(response, "metadata", None)
+                    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+                    input_tokens = metadata.get("prompt_tokens", 0)
+                    output_tokens = metadata.get("completion_tokens", 0)
+
+                input_tokens_int = (
+                    int(input_tokens) if isinstance(input_tokens, (int, float)) else 0
+                )
+                output_tokens_int = (
+                    int(output_tokens) if isinstance(output_tokens, (int, float)) else 0
+                )
             except Exception as e:
                 logger.warning(f"Pipeline query failed: {e}")
                 generated = f"[Error: {e}]"
@@ -177,8 +226,8 @@ class EvaluationRunner:
             category=category,
             context=context,
             latency_ms=latency_ms,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            input_tokens=input_tokens_int,
+            output_tokens=output_tokens_int,
         )
 
     def run(
@@ -247,12 +296,14 @@ class EvaluationRunner:
                 cat = metrics.category or "unknown"
                 if cat not in category_scores:
                     category_scores[cat] = []
-                category_scores[cat].append({
-                    "similarity": metrics.answer_similarity,
-                    "bleu": metrics.bleu_score,
-                    "faithfulness": metrics.faithfulness,
-                    "llm_judge_score": metrics.llm_judge_score,
-                })
+                category_scores[cat].append(
+                    {
+                        "similarity": metrics.answer_similarity,
+                        "bleu": metrics.bleu_score,
+                        "faithfulness": metrics.faithfulness,
+                        "llm_judge_score": metrics.llm_judge_score,
+                    }
+                )
 
                 case_results.append(metrics.to_dict())
 
@@ -276,9 +327,7 @@ class EvaluationRunner:
 
         # Get LLM judge model name from evaluator if available
         if self.evaluator and hasattr(self.evaluator, "llm_judge") and self.evaluator.llm_judge:
-            llm_judge_model = getattr(
-                self.evaluator.llm_judge.client, "model_name", ""
-            )
+            llm_judge_model = getattr(self.evaluator.llm_judge.client, "model_name", "")
 
         # Build result
         n = len(similarities)
@@ -297,9 +346,15 @@ class EvaluationRunner:
             verification_rate=verified_count / n if n > 0 else 0.0,
             # LLM-judge aggregated metrics
             mean_llm_judge_score=float(np.mean(llm_judge_scores)) if llm_judge_scores else 0.0,
-            mean_llm_correctness=float(np.mean(llm_correctness_scores)) if llm_correctness_scores else 0.0,
-            mean_llm_helpfulness=float(np.mean(llm_helpfulness_scores)) if llm_helpfulness_scores else 0.0,
-            mean_llm_faithfulness=float(np.mean(llm_faithfulness_scores)) if llm_faithfulness_scores else 0.0,
+            mean_llm_correctness=float(np.mean(llm_correctness_scores))
+            if llm_correctness_scores
+            else 0.0,
+            mean_llm_helpfulness=float(np.mean(llm_helpfulness_scores))
+            if llm_helpfulness_scores
+            else 0.0,
+            mean_llm_faithfulness=float(np.mean(llm_faithfulness_scores))
+            if llm_faithfulness_scores
+            else 0.0,
             mean_llm_fluency=float(np.mean(llm_fluency_scores)) if llm_fluency_scores else 0.0,
             llm_judge_model=llm_judge_model,
             category_scores=category_aggregated,

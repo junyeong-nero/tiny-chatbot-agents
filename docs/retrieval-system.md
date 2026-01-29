@@ -168,6 +168,30 @@ Triplet(subject="약관", predicate="정의", object="계약 조건")
 - 매칭된 triplet의 source_chunk_id로 원본 청크 연결
 - 점수 정규화 후 가중치 적용
 
+### Rerank (Cross-Encoder, 선택)
+
+Hybrid Search 결과 상위 후보에 대해 Cross-Encoder로 재정렬합니다.
+
+```
+final_score = (1 - w) × combined_score + w × normalized_rerank_score
+```
+
+- `normalized_rerank_score`: 후보 풀에서 min-max 정규화
+- Cross-Encoder 출력은 보통 unbounded logits이며, 정규화 후 결합합니다.
+- `w`: `configs/embedding_config.yaml`의 `reranker.weight`
+- rerank 활성화 시 `final_score`가 임계값 판단 및 정렬 기준으로 사용됩니다.
+
+#### 설정 예시 (configs/embedding_config.yaml)
+
+```yaml
+reranker:
+  enabled: true
+  candidates: 20
+  top_k: null
+  weight: 0.3
+  default_model: bge-reranker-v2-m3
+```
+
 ### 사용 예시
 
 ```python

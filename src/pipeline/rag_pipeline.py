@@ -198,9 +198,7 @@ class RAGPipeline:
 
         best = results[0]
         if best.score < self.qna_threshold:
-            logger.debug(
-                f"QnA score {best.score:.3f} below threshold {self.qna_threshold}"
-            )
+            logger.debug(f"QnA score {best.score:.3f} below threshold {self.qna_threshold}")
             return None
 
         # Build context from matched Q&A
@@ -246,6 +244,9 @@ class RAGPipeline:
                 "category": best.category,
                 "sub_category": best.sub_category,
                 "llm_model": response.model,
+                "prompt_tokens": response.usage.get("prompt_tokens", 0),
+                "completion_tokens": response.usage.get("completion_tokens", 0),
+                "total_tokens": response.usage.get("total_tokens", 0),
                 "tokens_used": response.usage.get("total_tokens", 0),
             },
         )
@@ -272,7 +273,10 @@ class RAGPipeline:
                 return None
 
             # Use combined_score for hybrid, score for regular
-            score_key = "combined_score" if "combined_score" in hybrid_results[0] else "score"
+            if "final_score" in hybrid_results[0]:
+                score_key = "final_score"
+            else:
+                score_key = "combined_score" if "combined_score" in hybrid_results[0] else "score"
             relevant = [r for r in hybrid_results if r.get(score_key, 0) >= self.tos_threshold]
 
             if not relevant:
@@ -301,8 +305,7 @@ class RAGPipeline:
 
         if not relevant:
             logger.debug(
-                f"ToS scores below threshold {self.tos_threshold}. "
-                f"Best: {results[0].score:.3f}"
+                f"ToS scores below threshold {self.tos_threshold}. Best: {results[0].score:.3f}"
             )
             return None
 
@@ -377,8 +380,13 @@ class RAGPipeline:
             metadata={
                 "section_reference": section_match,
                 "llm_model": response.model,
+                "prompt_tokens": response.usage.get("prompt_tokens", 0),
+                "completion_tokens": response.usage.get("completion_tokens", 0),
+                "total_tokens": response.usage.get("total_tokens", 0),
                 "tokens_used": response.usage.get("total_tokens", 0),
-                "verification_reasoning": verification_result.reasoning if verification_result else None,
+                "verification_reasoning": verification_result.reasoning
+                if verification_result
+                else None,
             },
             verified=verification_result.verified if verification_result else True,
             verification_score=verification_result.confidence if verification_result else 1.0,
@@ -434,12 +442,14 @@ class RAGPipeline:
         citations = self._extract_citations(response.content)
         if not citations:
             citations = [
-                f"{r.get('document_title', '')} - {r.get('section_title', '')}"
-                for r in results[:2]
+                f"{r.get('document_title', '')} - {r.get('section_title', '')}" for r in results[:2]
             ]
 
         # Use combined_score if available
-        score_key = "combined_score" if "combined_score" in results[0] else "score"
+        if "final_score" in results[0]:
+            score_key = "final_score"
+        else:
+            score_key = "combined_score" if "combined_score" in results[0] else "score"
         avg_score = sum(r.get(score_key, 0) for r in results) / len(results)
         logger.info(f"ToS context found with avg score {avg_score:.3f} (hybrid)")
 
@@ -477,6 +487,8 @@ class RAGPipeline:
                     "section_title": r.get("section_title", ""),
                     "section_content": r.get("section_content", "")[:500],
                     "combined_score": r.get("combined_score", 0),
+                    "final_score": r.get("final_score"),
+                    "rerank_score": r.get("rerank_score"),
                     "vector_score": r.get("vector_score", 0),
                     "rule_score": r.get("rule_score", 0),
                     "triplet_score": r.get("triplet_score", 0),
@@ -487,8 +499,13 @@ class RAGPipeline:
             metadata={
                 "section_reference": section_match,
                 "llm_model": response.model,
+                "prompt_tokens": response.usage.get("prompt_tokens", 0),
+                "completion_tokens": response.usage.get("completion_tokens", 0),
+                "total_tokens": response.usage.get("total_tokens", 0),
                 "tokens_used": response.usage.get("total_tokens", 0),
-                "verification_reasoning": verification_result.reasoning if verification_result else None,
+                "verification_reasoning": verification_result.reasoning
+                if verification_result
+                else None,
                 "hybrid_search": True,
                 "matched_keywords": list(set(matched_keywords)),
                 "matched_triplets": matched_triplets[:5],  # Limit triplets shown
@@ -531,9 +548,11 @@ class RAGPipeline:
             citations=[],
             metadata={
                 "llm_model": response.model,
+                "prompt_tokens": response.usage.get("prompt_tokens", 0),
+                "completion_tokens": response.usage.get("completion_tokens", 0),
+                "total_tokens": response.usage.get("total_tokens", 0),
                 "tokens_used": response.usage.get("total_tokens", 0),
             },
-
         )
 
     def _extract_section_reference(self, query: str) -> str | None:
@@ -621,7 +640,6 @@ class RAGPipeline:
             for r in results
         ]
 
-
     def _verify_answer(
         self,
         question: str,
@@ -649,9 +667,7 @@ class RAGPipeline:
             )
 
             if result.verified:
-                logger.info(
-                    f"Answer verified. Score: {result.confidence:.2f}"
-                )
+                logger.info(f"Answer verified. Score: {result.confidence:.2f}")
             else:
                 logger.warning(
                     f"Answer verification failed. Score: {result.confidence:.2f}, "

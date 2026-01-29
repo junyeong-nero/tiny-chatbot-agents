@@ -105,12 +105,13 @@ def create_pipeline(model: str, provider: str):
 
         llm_client = create_llm_client(model=model if model else None)
 
-        # Check if LLM is available
-        if not llm_client.health_check():
+        # Check if LLM is available when health_check exists
+        health_check = getattr(llm_client, "health_check", None)
+        if callable(health_check) and not health_check():
             logger.warning(f"LLM health check failed for {model}")
             return None
 
-        pipeline = RAGPipeline(llm_client=llm_client)
+        pipeline = RAGPipeline(llm=llm_client)
         return pipeline
 
     except Exception as e:
@@ -148,9 +149,7 @@ def main():
         try:
             from src.evaluation import create_llm_judge
 
-            logger.info(
-                f"Creating LLM judge with {args.judge_provider}/{args.judge_model}"
-            )
+            logger.info(f"Creating LLM judge with {args.judge_provider}/{args.judge_model}")
             llm_judge = create_llm_judge(
                 provider=args.judge_provider,
                 model=args.judge_model,
@@ -168,9 +167,9 @@ def main():
     # Run evaluation for each model
     all_results = []
     for model in models:
-        logger.info(f"\n{'='*50}")
+        logger.info(f"\n{'=' * 50}")
         logger.info(f"Evaluating model: {model}")
-        logger.info(f"{'='*50}")
+        logger.info(f"{'=' * 50}")
 
         # Create pipeline
         pipeline = None
