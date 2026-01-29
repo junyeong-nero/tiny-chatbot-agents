@@ -294,7 +294,7 @@ class ToSVectorStore:
                     continue
 
                 chunk_id = hashlib.sha256(
-                    f"{chunk['document_title']}_{section_title}_{section_content[:100]}".encode()
+                    f"{chunk['document_title']}_{section_title}_{section_content[:500]}".encode()
                 ).hexdigest()[:16]
 
                 if chunk_id in seen_ids:
