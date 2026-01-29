@@ -88,6 +88,7 @@ tiny-chatbot-agents/
 │   ├── vectorstore/            # Vector DB (ChromaDB)
 │   │   ├── qna_store.py
 │   │   ├── tos_store.py
+│   │   ├── backfill.py         # 상담원 답변 Backfill
 │   │   └── embeddings.py
 │   ├── tos_search/             # ToS 하이브리드 검색
 │   │   ├── rule_matcher.py     # 조항 패턴 + 키워드 매칭
@@ -116,6 +117,7 @@ tiny-chatbot-agents/
 ├── scripts/
 │   ├── ingest_qna.py           # QnA 데이터 적재
 │   ├── ingest_tos.py           # ToS 데이터 적재
+│   ├── backfill_agent_answers.py # 상담원 답변 Backfill
 │   ├── run_pipeline.py         # CLI 실행
 │   ├── run_mcp_server.py       # MCP 서버 실행
 │   ├── run_evaluation.py       # 평가 실행
@@ -159,6 +161,31 @@ python scripts/ingest_qna.py --file data/raw/qna/qnacrawler_xxx.json
 
 # 기존 데이터 삭제 후 적재
 python scripts/ingest_tos.py --clear
+
+# 상담원 답변 Backfill (Human-in-the-loop)
+python scripts/backfill_agent_answers.py --file data/raw/agent_answers.json
+
+# 중복 체크 후 추가
+python scripts/backfill_agent_answers.py --file answers.json --check-duplicates
+
+# 단일 답변 추가
+python scripts/backfill_agent_answers.py --add "질문" "답변" --category "계좌"
+
+# 기존 답변 검색
+python scripts/backfill_agent_answers.py --search "계좌 해지"
+```
+
+**상담원 답변 JSON 형식:**
+```json
+[
+  {
+    "question": "계좌 해지 방법이 뭐야?",
+    "answer": "고객센터 또는 앱에서 해지 신청 가능합니다.",
+    "category": "계좌",
+    "agent_id": "agent_001",
+    "session_id": "sess_12345"
+  }
+]
 ```
 
 ### 3. LLM 서버 실행
