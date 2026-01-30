@@ -133,6 +133,90 @@ class TestEvaluationMetrics:
         assert d["latency_ms"] == 100.0
 
 
+class TestLLMJudgeParsing:
+    """Tests for LLM Judge JSON parsing."""
+
+    def test_extract_scores_regex_basic(self):
+        """Test regex-based score extraction."""
+        from src.evaluation.llm_judge import LLMJudge
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_client.model_name = "test-model"
+        judge = LLMJudge(mock_client)
+
+        response = '''
+        {
+            "correctness": {"score": 4, "reasoning": "good"},
+            "helpfulness": {"score": 5, "reasoning": "great"}
+        }
+        '''
+        criteria = ["correctness", "helpfulness"]
+        scores, overall = judge._extract_scores_regex(response, criteria)
+
+        assert "correctness" in scores
+        assert scores["correctness"].score == 4.0
+        assert "helpfulness" in scores
+        assert scores["helpfulness"].score == 5.0
+
+    def test_extract_scores_regex_malformed(self):
+        """Test regex extraction from malformed JSON."""
+        from src.evaluation.llm_judge import LLMJudge
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_client.model_name = "test-model"
+        judge = LLMJudge(mock_client)
+
+        # Malformed JSON but scores are visible
+        response = '''
+        correctness: {"score": 4, reasoning: missing quote}
+        overall_score: 4.5
+        '''
+        criteria = ["correctness", "helpfulness"]
+        scores, overall = judge._extract_scores_regex(response, criteria)
+
+        assert "correctness" in scores
+        assert scores["correctness"].score == 4.0
+        assert overall == 4.5
+
+    def test_parse_response_partial(self):
+        """Test that partial parsing fills missing criteria with defaults."""
+        from src.evaluation.llm_judge import LLMJudge
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_client.model_name = "test-model"
+        judge = LLMJudge(mock_client, criteria=["correctness", "helpfulness", "fluency"])
+
+        # Only one criterion present
+        response = '{"correctness": {"score": 5, "reasoning": "perfect"}}'
+        result = judge._parse_comprehensive_response(
+            response, "q", "golden", "generated", ["correctness", "helpfulness", "fluency"]
+        )
+
+        assert result.criteria_scores["correctness"].score == 5.0
+        # Missing criteria should get default 3.0
+        assert result.criteria_scores["helpfulness"].score == 3.0
+        assert result.criteria_scores["fluency"].score == 3.0
+
+    def test_error_result_uses_neutral_scores(self):
+        """Test that error results use neutral scores (3.0) by default."""
+        from src.evaluation.llm_judge import LLMJudge
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_client.model_name = "test-model"
+        judge = LLMJudge(mock_client)
+
+        result = judge._create_error_result("q", "golden", "generated", "test error")
+
+        assert result.overall_score == 3.0
+        for criterion, score in result.criteria_scores.items():
+            assert score.score == 3.0
+            assert "Error" in score.reasoning
+
+
 class TestEvaluationRunner:
     """Tests for EvaluationRunner class."""
 

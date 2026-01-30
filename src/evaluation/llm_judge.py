@@ -6,10 +6,17 @@ against golden (reference) answers using various quality criteria.
 
 import json
 import logging
+import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from .frontier_client import FrontierClient
+
+# Retry configuration
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_RETRY_DELAY = 1.0  # seconds
+RETRY_BACKOFF_MULTIPLIER = 2.0
 from .judge_prompts import (
     COMPREHENSIVE_JUDGE_PROMPT,
     CONTEXT_AWARE_CRITERIA,
@@ -94,6 +101,8 @@ class LLMJudge:
         frontier_client: FrontierClient,
         criteria: list[str] | None = None,
         use_comprehensive: bool = True,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
     ) -> None:
         """Initialize LLM Judge.
 
@@ -101,10 +110,14 @@ class LLMJudge:
             frontier_client: Client for frontier model API
             criteria: List of criteria to evaluate (default: all)
             use_comprehensive: Use single comprehensive prompt (more efficient)
+            max_retries: Maximum number of retries on parse failure (default: 2)
+            retry_delay: Initial delay between retries in seconds (default: 1.0)
         """
         self.client = frontier_client
         self.criteria = criteria or DEFAULT_CRITERIA
         self.use_comprehensive = use_comprehensive
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
 
     def judge(
         self,
@@ -135,7 +148,7 @@ class LLMJudge:
         generated_answer: str,
         context: list[dict[str, Any]] | None = None,
     ) -> JudgeResult:
-        """Judge using comprehensive single-prompt approach."""
+        """Judge using comprehensive single-prompt approach with retry logic."""
         if context:
             formatted_context = self._format_context_for_judge(context)
             prompt = CONTEXT_AWARE_JUDGE_PROMPT.format(
@@ -158,14 +171,50 @@ class LLMJudge:
             {"role": "user", "content": prompt},
         ]
 
-        try:
-            response = self.client.generate(messages)
-            return self._parse_comprehensive_response(
-                response, question, golden_answer, generated_answer, effective_criteria
-            )
-        except Exception as e:
-            logger.error(f"Judge evaluation failed: {e}")
-            return self._create_error_result(question, golden_answer, generated_answer, str(e))
+        last_error = None
+        delay = self.retry_delay
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.client.generate(messages)
+                result = self._parse_comprehensive_response(
+                    response, question, golden_answer, generated_answer, effective_criteria
+                )
+
+                # Check if parsing produced valid scores (not all zeros from error)
+                if result.overall_score > 0 or any(
+                    cs.score > 0 for cs in result.criteria_scores.values()
+                ):
+                    return result
+
+                # If we got a result but all scores are 0, it might be a parse issue
+                # Try again if we have retries left
+                if attempt < self.max_retries:
+                    logger.warning(
+                        f"Judge returned zero scores (attempt {attempt + 1}/{self.max_retries + 1}), "
+                        "retrying..."
+                    )
+                    time.sleep(delay)
+                    delay *= RETRY_BACKOFF_MULTIPLIER
+                    continue
+
+                return result
+
+            except Exception as e:
+                last_error = e
+                if attempt < self.max_retries:
+                    logger.warning(
+                        f"Judge evaluation failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}, "
+                        "retrying..."
+                    )
+                    time.sleep(delay)
+                    delay *= RETRY_BACKOFF_MULTIPLIER
+                else:
+                    logger.error(f"Judge evaluation failed after {self.max_retries + 1} attempts: {e}")
+
+        return self._create_error_result(
+            question, golden_answer, generated_answer, str(last_error)
+        )
 
     def _format_context_for_judge(self, context: list[dict[str, Any]]) -> str:
         """Format retrieved context for judge prompt."""
@@ -249,46 +298,139 @@ class LLMJudge:
         generated_answer: str,
         criteria: list[str] | None = None,
     ) -> JudgeResult:
-        """Parse comprehensive judge response JSON."""
+        """Parse comprehensive judge response JSON with partial parsing support.
+
+        If JSON parsing fails completely, attempts to extract scores using regex.
+        If only some criteria are found, uses those and fills missing with neutral scores.
+        """
         effective_criteria = criteria or self.criteria
+        criteria_scores: dict[str, CriteriaScore] = {}
+        overall = 0.0
+        summary = ""
+        parse_warnings: list[str] = []
+
         try:
             json_str = self._extract_json(response)
             data = json.loads(json_str)
 
-            criteria_scores = {}
             for criterion in effective_criteria:
                 if criterion in data and isinstance(data[criterion], dict):
-                    criteria_scores[criterion] = CriteriaScore(
-                        criterion=criterion,
-                        score=float(data[criterion].get("score", 3)),
-                        reasoning=data[criterion].get("reasoning", ""),
-                    )
+                    try:
+                        score = float(data[criterion].get("score", 3))
+                        # Clamp score to valid range
+                        score = max(1.0, min(5.0, score))
+                        criteria_scores[criterion] = CriteriaScore(
+                            criterion=criterion,
+                            score=score,
+                            reasoning=data[criterion].get("reasoning", ""),
+                        )
+                    except (ValueError, TypeError) as e:
+                        parse_warnings.append(f"Invalid score for {criterion}: {e}")
 
-            # Calculate overall if not provided
+            # Get overall score
             if "overall_score" in data:
-                overall = float(data["overall_score"])
-            elif criteria_scores:
-                overall = sum(cs.score for cs in criteria_scores.values()) / len(criteria_scores)
-            else:
-                overall = 3.0
+                try:
+                    overall = float(data["overall_score"])
+                    overall = max(1.0, min(5.0, overall))
+                except (ValueError, TypeError):
+                    pass
 
-            return JudgeResult(
-                question=question,
-                golden_answer=golden_answer,
-                generated_answer=generated_answer,
-                criteria_scores=criteria_scores,
-                overall_score=overall,
-                summary=data.get("summary", ""),
-                raw_response=response,
-                judge_model=self.client.model_name,
-            )
+            summary = data.get("summary", "")
 
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.warning(f"Failed to parse judge response: {e}")
-            logger.debug(f"Raw response: {response}")
-            return self._create_error_result(
-                question, golden_answer, generated_answer, f"Parse error: {e}"
-            )
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parsing failed, attempting regex extraction: {e}")
+            # Try regex-based score extraction as fallback
+            criteria_scores, overall = self._extract_scores_regex(response, effective_criteria)
+            if criteria_scores:
+                parse_warnings.append("Scores extracted via regex fallback")
+
+        except (KeyError, TypeError) as e:
+            logger.warning(f"Failed to parse judge response structure: {e}")
+            parse_warnings.append(str(e))
+
+        # Fill missing criteria with neutral scores (3.0)
+        for criterion in effective_criteria:
+            if criterion not in criteria_scores:
+                criteria_scores[criterion] = CriteriaScore(
+                    criterion=criterion,
+                    score=3.0,
+                    reasoning="Score not parsed (using neutral default)",
+                )
+                parse_warnings.append(f"Missing {criterion}, using default 3.0")
+
+        # Calculate overall if not found
+        if overall == 0.0 and criteria_scores:
+            overall = sum(cs.score for cs in criteria_scores.values()) / len(criteria_scores)
+
+        # Add parse warnings to summary if any
+        if parse_warnings:
+            warning_text = f" [Parse warnings: {'; '.join(parse_warnings)}]"
+            summary = (summary + warning_text) if summary else warning_text.strip()
+            logger.debug(f"Parse warnings: {parse_warnings}")
+
+        return JudgeResult(
+            question=question,
+            golden_answer=golden_answer,
+            generated_answer=generated_answer,
+            criteria_scores=criteria_scores,
+            overall_score=overall,
+            summary=summary,
+            raw_response=response,
+            judge_model=self.client.model_name,
+        )
+
+    def _extract_scores_regex(
+        self,
+        response: str,
+        criteria: list[str],
+    ) -> tuple[dict[str, CriteriaScore], float]:
+        """Extract scores from response using regex patterns as fallback.
+
+        Handles cases where LLM returns malformed JSON but scores are visible.
+        """
+        criteria_scores: dict[str, CriteriaScore] = {}
+        overall = 0.0
+
+        # Pattern variations LLMs might use
+        # e.g., "correctness": {"score": 4, "reasoning": "..."}
+        # e.g., "score": 4 or "score":4 or score: 4
+        score_pattern = re.compile(
+            r'"?(\w+)"?\s*:\s*\{[^}]*"?score"?\s*:\s*(\d+(?:\.\d+)?)',
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        for match in score_pattern.finditer(response):
+            criterion_name = match.group(1).lower()
+            try:
+                score = float(match.group(2))
+                score = max(1.0, min(5.0, score))
+
+                # Map to expected criteria names
+                for criterion in criteria:
+                    if criterion.lower() in criterion_name or criterion_name in criterion.lower():
+                        criteria_scores[criterion] = CriteriaScore(
+                            criterion=criterion,
+                            score=score,
+                            reasoning="(extracted via regex)",
+                        )
+                        break
+            except ValueError:
+                continue
+
+        # Try to extract overall score
+        overall_pattern = re.compile(
+            r'"?overall_?score"?\s*:\s*(\d+(?:\.\d+)?)',
+            re.IGNORECASE,
+        )
+        overall_match = overall_pattern.search(response)
+        if overall_match:
+            try:
+                overall = float(overall_match.group(1))
+                overall = max(1.0, min(5.0, overall))
+            except ValueError:
+                pass
+
+        return criteria_scores, overall
 
     def _extract_json(self, text: str) -> str:
         """Extract JSON from text, handling markdown code blocks."""
@@ -337,8 +479,25 @@ class LLMJudge:
         golden_answer: str,
         generated_answer: str,
         error_msg: str,
+        use_neutral_scores: bool = True,
     ) -> JudgeResult:
-        """Create a result for error cases."""
+        """Create a result for error cases.
+
+        Args:
+            question: Original question
+            golden_answer: Reference answer
+            generated_answer: Generated answer that was being evaluated
+            error_msg: Error message describing what went wrong
+            use_neutral_scores: If True, use 3.0 (neutral) instead of 0.0 for scores
+                              This prevents error cases from unfairly penalizing results.
+
+        Returns:
+            JudgeResult with error information
+        """
+        # Use neutral score (3.0) to avoid unfairly penalizing when evaluation fails
+        # 0.0 would be misleading as it suggests the answer was terrible
+        error_score = 3.0 if use_neutral_scores else 0.0
+
         return JudgeResult(
             question=question,
             golden_answer=golden_answer,
@@ -346,13 +505,13 @@ class LLMJudge:
             criteria_scores={
                 criterion: CriteriaScore(
                     criterion=criterion,
-                    score=0.0,
-                    reasoning=error_msg,
+                    score=error_score,
+                    reasoning=f"[Error: {error_msg}]",
                 )
                 for criterion in self.criteria
             },
-            overall_score=0.0,
-            summary=error_msg,
+            overall_score=error_score,
+            summary=f"Evaluation error: {error_msg}",
             judge_model=self.client.model_name,
         )
 

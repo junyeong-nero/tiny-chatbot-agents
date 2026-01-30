@@ -14,9 +14,10 @@
   - 방안: asyncio + ThreadPoolExecutor 또는 concurrent.futures 활용
   - **완료**: ThreadPoolExecutor 기반 병렬 실행, `--parallel` / `--max-workers` CLI 옵션 추가
 
-- [ ] **3. LLM Judge JSON 파싱 안정화**: 파싱 실패 시 0.0 점수 부여가 결과 왜곡 유발
+- [x] **3. LLM Judge JSON 파싱 안정화**: 파싱 실패 시 0.0 점수 부여가 결과 왜곡 유발
   - 파일: `src/evaluation/llm_judge.py:244-291`
   - 방안: Retry 로직, Partial parsing, Structured output mode
+  - **완료**: Exponential backoff retry, regex fallback 파싱, 에러 시 neutral score (3.0) 사용
 
 ### 🟡 High Priority
 
