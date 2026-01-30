@@ -7,8 +7,10 @@ evaluation across multiple test cases and models.
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import numpy as np
@@ -16,6 +18,9 @@ import numpy as np
 from .evaluator import EvaluationMetrics, LLMEvaluator
 
 logger = logging.getLogger(__name__)
+
+# Default number of parallel workers
+DEFAULT_MAX_WORKERS = 4
 
 
 @dataclass
@@ -110,6 +115,35 @@ class EvaluationRunner:
         self.evaluator = evaluator or LLMEvaluator()
         self.dataset_path = Path(dataset_path) if dataset_path else None
         self.dataset: list[dict[str, Any]] = []
+
+    def _warmup_evaluator(self) -> None:
+        """Pre-initialize lazy-loaded models for thread-safe parallel execution.
+
+        This method triggers initialization of:
+        - Embedding model (sentence-transformers)
+        - Korean tokenizer (kiwipiepy)
+
+        Call this before running parallel evaluation to avoid race conditions.
+        """
+        if not self.evaluator:
+            return
+
+        # Initialize embedding model
+        if hasattr(self.evaluator, "embeddings"):
+            try:
+                _ = self.evaluator.embeddings
+                logger.debug("Embedding model warmed up")
+            except Exception as e:
+                logger.warning(f"Failed to warm up embedding model: {e}")
+
+        # Initialize Korean tokenizer by running a dummy tokenization
+        try:
+            from .evaluator import _get_korean_tokenizer
+
+            _ = _get_korean_tokenizer()
+            logger.debug("Korean tokenizer warmed up")
+        except Exception as e:
+            logger.warning(f"Failed to warm up Korean tokenizer: {e}")
 
     def load_dataset(self, path: str | Path | None = None) -> list[dict[str, Any]]:
         """Load evaluation dataset from JSON file.
@@ -235,6 +269,8 @@ class EvaluationRunner:
         dataset: list[dict[str, Any]] | None = None,
         limit: int | None = None,
         model_name: str = "unknown",
+        parallel: bool = False,
+        max_workers: int | None = None,
     ) -> EvaluationResult:
         """Run evaluation on the full dataset.
 
@@ -242,6 +278,8 @@ class EvaluationRunner:
             dataset: Optional dataset to use (overrides loaded dataset)
             limit: Optional limit on number of test cases
             model_name: Name of the model being evaluated
+            parallel: Whether to run evaluation in parallel (default: False)
+            max_workers: Maximum number of parallel workers (default: 4)
 
         Returns:
             EvaluationResult with aggregated metrics
@@ -253,8 +291,121 @@ class EvaluationRunner:
         if limit:
             test_cases = test_cases[:limit]
 
-        logger.info(f"Running evaluation on {len(test_cases)} test cases")
+        if parallel:
+            return self._run_parallel(test_cases, model_name, max_workers)
+        return self._run_sequential(test_cases, model_name)
 
+    def _run_sequential(
+        self,
+        test_cases: list[dict[str, Any]],
+        model_name: str,
+    ) -> EvaluationResult:
+        """Run evaluation sequentially (original implementation).
+
+        Args:
+            test_cases: List of test cases to evaluate
+            model_name: Name of the model being evaluated
+
+        Returns:
+            EvaluationResult with aggregated metrics
+        """
+        logger.info(f"Running sequential evaluation on {len(test_cases)} test cases")
+
+        all_metrics: list[EvaluationMetrics] = []
+
+        for i, test_case in enumerate(test_cases):
+            try:
+                metrics = self.run_single(test_case)
+                all_metrics.append(metrics)
+
+                if (i + 1) % 10 == 0:
+                    logger.info(f"Evaluated {i + 1}/{len(test_cases)} cases")
+
+            except Exception as e:
+                logger.error(f"Evaluation failed for case {i}: {e}")
+                continue
+
+        return self._aggregate_results(all_metrics, len(test_cases), model_name)
+
+    def _run_parallel(
+        self,
+        test_cases: list[dict[str, Any]],
+        model_name: str,
+        max_workers: int | None = None,
+    ) -> EvaluationResult:
+        """Run evaluation in parallel using ThreadPoolExecutor.
+
+        Args:
+            test_cases: List of test cases to evaluate
+            model_name: Name of the model being evaluated
+            max_workers: Maximum number of parallel workers
+
+        Returns:
+            EvaluationResult with aggregated metrics
+        """
+        workers = max_workers or DEFAULT_MAX_WORKERS
+        logger.info(
+            f"Running parallel evaluation on {len(test_cases)} test cases "
+            f"with {workers} workers"
+        )
+
+        # Pre-initialize models to avoid thread-safety issues
+        # This ensures all lazy-loaded models are ready before parallel access
+        self._warmup_evaluator()
+
+        all_metrics: list[EvaluationMetrics] = []
+        completed_count = 0
+        progress_lock = Lock()
+
+        def evaluate_with_progress(idx: int, test_case: dict[str, Any]) -> EvaluationMetrics | None:
+            """Evaluate a single test case and report progress."""
+            nonlocal completed_count
+            try:
+                metrics = self.run_single(test_case)
+                with progress_lock:
+                    completed_count += 1
+                    if completed_count % 10 == 0:
+                        logger.info(f"Evaluated {completed_count}/{len(test_cases)} cases")
+                return metrics
+            except Exception as e:
+                logger.error(f"Evaluation failed for case {idx}: {e}")
+                with progress_lock:
+                    completed_count += 1
+                return None
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            # Submit all tasks
+            futures = {
+                executor.submit(evaluate_with_progress, i, tc): i
+                for i, tc in enumerate(test_cases)
+            }
+
+            # Collect results as they complete
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    all_metrics.append(result)
+
+        logger.info(f"Parallel evaluation complete: {len(all_metrics)}/{len(test_cases)} succeeded")
+
+        return self._aggregate_results(all_metrics, len(test_cases), model_name)
+
+    def _aggregate_results(
+        self,
+        all_metrics: list[EvaluationMetrics],
+        total_cases: int,
+        model_name: str,
+    ) -> EvaluationResult:
+        """Aggregate individual metrics into an EvaluationResult.
+
+        Args:
+            all_metrics: List of individual EvaluationMetrics
+            total_cases: Total number of test cases attempted
+            model_name: Name of the model being evaluated
+
+        Returns:
+            EvaluationResult with aggregated metrics
+        """
         # Collect individual results
         similarities = []
         bleus = []
@@ -270,49 +421,38 @@ class EvaluationRunner:
         llm_helpfulness_scores = []
         llm_faithfulness_scores = []
         llm_fluency_scores = []
-        llm_judge_model = ""
 
-        for i, test_case in enumerate(test_cases):
-            try:
-                metrics = self.run_single(test_case)
+        for metrics in all_metrics:
+            similarities.append(metrics.answer_similarity)
+            bleus.append(metrics.bleu_score)
+            faiths.append(metrics.faithfulness)
+            latencies.append(metrics.latency_ms)
 
-                similarities.append(metrics.answer_similarity)
-                bleus.append(metrics.bleu_score)
-                faiths.append(metrics.faithfulness)
-                latencies.append(metrics.latency_ms)
+            if metrics.verified:
+                verified_count += 1
 
-                if metrics.verified:
-                    verified_count += 1
+            # Collect LLM-judge scores if available
+            if metrics.llm_judge_score > 0:
+                llm_judge_scores.append(metrics.llm_judge_score)
+                llm_correctness_scores.append(metrics.llm_correctness)
+                llm_helpfulness_scores.append(metrics.llm_helpfulness)
+                llm_faithfulness_scores.append(metrics.llm_faithfulness)
+                llm_fluency_scores.append(metrics.llm_fluency)
 
-                # Collect LLM-judge scores if available
-                if metrics.llm_judge_score > 0:
-                    llm_judge_scores.append(metrics.llm_judge_score)
-                    llm_correctness_scores.append(metrics.llm_correctness)
-                    llm_helpfulness_scores.append(metrics.llm_helpfulness)
-                    llm_faithfulness_scores.append(metrics.llm_faithfulness)
-                    llm_fluency_scores.append(metrics.llm_fluency)
+            # Track by category
+            cat = metrics.category or "unknown"
+            if cat not in category_scores:
+                category_scores[cat] = []
+            category_scores[cat].append(
+                {
+                    "similarity": metrics.answer_similarity,
+                    "bleu": metrics.bleu_score,
+                    "faithfulness": metrics.faithfulness,
+                    "llm_judge_score": metrics.llm_judge_score,
+                }
+            )
 
-                # Track by category
-                cat = metrics.category or "unknown"
-                if cat not in category_scores:
-                    category_scores[cat] = []
-                category_scores[cat].append(
-                    {
-                        "similarity": metrics.answer_similarity,
-                        "bleu": metrics.bleu_score,
-                        "faithfulness": metrics.faithfulness,
-                        "llm_judge_score": metrics.llm_judge_score,
-                    }
-                )
-
-                case_results.append(metrics.to_dict())
-
-                if (i + 1) % 10 == 0:
-                    logger.info(f"Evaluated {i + 1}/{len(test_cases)} cases")
-
-            except Exception as e:
-                logger.error(f"Evaluation failed for case {i}: {e}")
-                continue
+            case_results.append(metrics.to_dict())
 
         # Aggregate category scores
         category_aggregated = {}
@@ -326,6 +466,7 @@ class EvaluationRunner:
             }
 
         # Get LLM judge model name from evaluator if available
+        llm_judge_model = ""
         if self.evaluator and hasattr(self.evaluator, "llm_judge") and self.evaluator.llm_judge:
             llm_judge_model = getattr(self.evaluator.llm_judge.client, "model_name", "")
 
@@ -333,7 +474,7 @@ class EvaluationRunner:
         n = len(similarities)
         result = EvaluationResult(
             model_name=model_name,
-            total_cases=len(test_cases),
+            total_cases=total_cases,
             evaluated_cases=n,
             mean_similarity=float(np.mean(similarities)) if similarities else 0.0,
             mean_bleu=float(np.mean(bleus)) if bleus else 0.0,

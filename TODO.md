@@ -9,9 +9,10 @@
   - 방안: kiwipiepy (경량, 순수 Python) 또는 konlpy 사용
   - **완료**: kiwipiepy 도입, singleton 패턴으로 메모리 효율화
 
-- [ ] **2. 배치 평가 병렬 처리**: 50개 테스트 케이스 + LLM Judge 사용 시 순차 처리로 시간 과다 소요
+- [x] **2. 배치 평가 병렬 처리**: 50개 테스트 케이스 + LLM Judge 사용 시 순차 처리로 시간 과다 소요
   - 파일: `src/evaluation/runner.py:275-315`
   - 방안: asyncio + ThreadPoolExecutor 또는 concurrent.futures 활용
+  - **완료**: ThreadPoolExecutor 기반 병렬 실행, `--parallel` / `--max-workers` CLI 옵션 추가
 
 - [ ] **3. LLM Judge JSON 파싱 안정화**: 파싱 실패 시 0.0 점수 부여가 결과 왜곡 유발
   - 파일: `src/evaluation/llm_judge.py:244-291`

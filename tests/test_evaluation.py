@@ -187,6 +187,42 @@ class TestEvaluationRunner:
         # BLEU may be lower for short Korean texts
         assert result.mean_bleu > 0.0
 
+    def test_run_parallel(self, sample_dataset):
+        """Test running evaluation in parallel mode."""
+        from src.evaluation.runner import EvaluationRunner
+
+        runner = EvaluationRunner(
+            pipeline=None,
+            dataset_path=sample_dataset,
+        )
+        runner.load_dataset()
+        result = runner.run(model_name="test_parallel", parallel=True, max_workers=2)
+
+        assert result.model_name == "test_parallel"
+        assert result.evaluated_cases == 2
+        # Results should be same as sequential
+        assert result.mean_similarity > 0.9
+        assert result.mean_bleu > 0.0
+
+    def test_run_parallel_vs_sequential_consistency(self, sample_dataset):
+        """Test that parallel and sequential runs produce consistent results."""
+        from src.evaluation.runner import EvaluationRunner
+
+        runner = EvaluationRunner(
+            pipeline=None,
+            dataset_path=sample_dataset,
+        )
+        runner.load_dataset()
+
+        # Run both modes
+        seq_result = runner.run(model_name="seq", parallel=False)
+        par_result = runner.run(model_name="par", parallel=True, max_workers=2)
+
+        # Results should be equivalent
+        assert seq_result.evaluated_cases == par_result.evaluated_cases
+        assert abs(seq_result.mean_similarity - par_result.mean_similarity) < 0.01
+        assert abs(seq_result.mean_bleu - par_result.mean_bleu) < 0.01
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

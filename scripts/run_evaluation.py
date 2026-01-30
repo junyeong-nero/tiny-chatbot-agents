@@ -100,6 +100,19 @@ def parse_args():
         help="Raise error if judge and generator models are the same",
     )
 
+    # Parallel execution options
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run evaluation in parallel (faster for LLM-as-a-Judge)",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Maximum number of parallel workers (default: 4)",
+    )
+
     return parser.parse_args()
 
 
@@ -222,7 +235,12 @@ def main():
 
         # Load and run
         runner.load_dataset()
-        result = runner.run(limit=args.limit, model_name=model)
+        result = runner.run(
+            limit=args.limit,
+            model_name=model,
+            parallel=args.parallel,
+            max_workers=args.max_workers,
+        )
 
         # Save individual result
         output_path = output_dir / f"{output_base}_{model.replace(':', '_')}.json"
