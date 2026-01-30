@@ -12,6 +12,8 @@ from typing import Any
 from .frontier_client import FrontierClient
 from .judge_prompts import (
     COMPREHENSIVE_JUDGE_PROMPT,
+    CONTEXT_AWARE_CRITERIA,
+    CONTEXT_AWARE_JUDGE_PROMPT,
     CRITERIA_PROMPTS,
     DEFAULT_CRITERIA,
     JUDGE_SYSTEM_PROMPT,
@@ -117,13 +119,13 @@ class LLMJudge:
             question: Original question
             golden_answer: Reference/expected answer
             generated_answer: Model-generated answer to evaluate
-            context: Optional retrieval context (for additional info)
+            context: Optional retrieval context (for context-aware evaluation)
 
         Returns:
             JudgeResult with scores and reasoning
         """
         if self.use_comprehensive:
-            return self._judge_comprehensive(question, golden_answer, generated_answer)
+            return self._judge_comprehensive(question, golden_answer, generated_answer, context)
         return self._judge_per_criterion(question, golden_answer, generated_answer)
 
     def _judge_comprehensive(
@@ -131,13 +133,25 @@ class LLMJudge:
         question: str,
         golden_answer: str,
         generated_answer: str,
+        context: list[dict[str, Any]] | None = None,
     ) -> JudgeResult:
         """Judge using comprehensive single-prompt approach."""
-        prompt = COMPREHENSIVE_JUDGE_PROMPT.format(
-            question=question,
-            golden_answer=golden_answer,
-            generated_answer=generated_answer,
-        )
+        if context:
+            formatted_context = self._format_context_for_judge(context)
+            prompt = CONTEXT_AWARE_JUDGE_PROMPT.format(
+                question=question,
+                golden_answer=golden_answer,
+                retrieved_context=formatted_context,
+                generated_answer=generated_answer,
+            )
+            effective_criteria = CONTEXT_AWARE_CRITERIA
+        else:
+            prompt = COMPREHENSIVE_JUDGE_PROMPT.format(
+                question=question,
+                golden_answer=golden_answer,
+                generated_answer=generated_answer,
+            )
+            effective_criteria = self.criteria
 
         messages = [
             {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
@@ -147,13 +161,29 @@ class LLMJudge:
         try:
             response = self.client.generate(messages)
             return self._parse_comprehensive_response(
-                response, question, golden_answer, generated_answer
+                response, question, golden_answer, generated_answer, effective_criteria
             )
         except Exception as e:
             logger.error(f"Judge evaluation failed: {e}")
-            return self._create_error_result(
-                question, golden_answer, generated_answer, str(e)
-            )
+            return self._create_error_result(question, golden_answer, generated_answer, str(e))
+
+    def _format_context_for_judge(self, context: list[dict[str, Any]]) -> str:
+        """Format retrieved context for judge prompt."""
+        if not context:
+            return "(검색된 컨텍스트 없음)"
+
+        formatted = []
+        for i, c in enumerate(context, 1):
+            title = c.get("section_title", c.get("title", f"문서 {i}"))
+            content = c.get("section_content", c.get("content", c.get("answer", "")))
+            source = c.get("source", c.get("doc_id", ""))
+
+            header = f"[{title}]"
+            if source:
+                header += f" (출처: {source})"
+            formatted.append(f"{header}\n{content}")
+
+        return "\n\n".join(formatted)
 
     def _judge_per_criterion(
         self,
@@ -217,14 +247,16 @@ class LLMJudge:
         question: str,
         golden_answer: str,
         generated_answer: str,
+        criteria: list[str] | None = None,
     ) -> JudgeResult:
         """Parse comprehensive judge response JSON."""
+        effective_criteria = criteria or self.criteria
         try:
             json_str = self._extract_json(response)
             data = json.loads(json_str)
 
             criteria_scores = {}
-            for criterion in self.criteria:
+            for criterion in effective_criteria:
                 if criterion in data and isinstance(data[criterion], dict):
                     criteria_scores[criterion] = CriteriaScore(
                         criterion=criterion,
@@ -361,6 +393,10 @@ def create_llm_judge(
     model: str | None = None,
     criteria: list[str] | None = None,
     use_comprehensive: bool = True,
+    generator_model: str | None = None,
+    generator_provider: str | None = None,
+    auto_diverse: bool = False,
+    strict_diversity: bool = False,
 ) -> LLMJudge:
     """Factory function to create an LLM judge.
 
@@ -369,16 +405,44 @@ def create_llm_judge(
         model: Optional model override
         criteria: Criteria to evaluate
         use_comprehensive: Use single comprehensive prompt
+        generator_model: Model used for golden answer generation (for diversity check)
+        generator_provider: Provider of generator model (for diversity check)
+        auto_diverse: Auto-select a different model from the generator
+        strict_diversity: Raise error if generator and judge are the same model
 
     Returns:
         Configured LLMJudge
     """
-    from .frontier_client import create_frontier_client
+    from .frontier_client import JudgeModelSelector, create_frontier_client
+
+    final_provider = provider
+    final_model = model
+
+    if auto_diverse and generator_model:
+        diverse_provider, diverse_model = JudgeModelSelector.get_diverse_judge(
+            generator_model=generator_model,
+            generator_provider=generator_provider,
+        )
+        final_provider = diverse_provider
+        final_model = diverse_model
+        logger.info(
+            f"Auto-selected diverse judge: {diverse_provider}/{diverse_model} "
+            f"(generator was {generator_provider}/{generator_model})"
+        )
+    elif generator_model:
+        resolved_model = model or _get_default_model(provider)
+        JudgeModelSelector.validate_diversity(
+            generator_model=generator_model,
+            judge_model=resolved_model,
+            generator_provider=generator_provider,
+            judge_provider=provider,
+            strict=strict_diversity,
+        )
 
     client = create_frontier_client(
-        provider=provider,
-        model=model,
-        temperature=0.0,  # Use deterministic output for judging
+        provider=final_provider,
+        model=final_model,
+        temperature=0.0,
     )
 
     return LLMJudge(
@@ -386,3 +450,13 @@ def create_llm_judge(
         criteria=criteria,
         use_comprehensive=use_comprehensive,
     )
+
+
+def _get_default_model(provider: str) -> str:
+    """Get the default model for a provider."""
+    defaults = {
+        "openai": "gpt-4o",
+        "anthropic": "claude-sonnet-4-20250514",
+        "google": "gemini-1.5-pro",
+    }
+    return defaults.get(provider, "gpt-4o")

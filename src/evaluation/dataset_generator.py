@@ -36,6 +36,8 @@ class EvaluationItem:
     category: str
     difficulty: Difficulty = Difficulty.MEDIUM
     source_context: list[dict[str, Any]] = field(default_factory=list)
+    generation_context: list[dict[str, Any]] = field(default_factory=list)
+    expected_sources: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -43,11 +45,12 @@ class EvaluationItem:
             "id": self.id,
             "question": self.question,
             "golden_answer": self.golden_answer,
-            # Alias for backward compatibility with existing dataset format
             "expected_answer": self.golden_answer,
             "category": self.category,
             "difficulty": self.difficulty.value,
             "source_context": self.source_context,
+            "generation_context": self.generation_context,
+            "expected_sources": self.expected_sources,
             "metadata": self.metadata,
         }
 
@@ -61,6 +64,8 @@ class EvaluationItem:
             category=data.get("category", ""),
             difficulty=Difficulty(data.get("difficulty", "medium")),
             source_context=data.get("source_context", []),
+            generation_context=data.get("generation_context", []),
+            expected_sources=data.get("expected_sources", []),
             metadata=data.get("metadata", {}),
         )
 
@@ -73,6 +78,7 @@ class EvaluationDataset:
     generator_model: str
     generation_timestamp: str
     version: str = "1.0"
+    generator_provider: str = ""  # Track provider for judge diversity selection
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __len__(self) -> int:
@@ -85,6 +91,7 @@ class EvaluationDataset:
         return {
             "version": self.version,
             "generator_model": self.generator_model,
+            "generator_provider": self.generator_provider,
             "generation_timestamp": self.generation_timestamp,
             "metadata": self.metadata,
             "items": [item.to_dict() for item in self.items],
@@ -110,6 +117,7 @@ class EvaluationDataset:
             generator_model=data.get("generator_model", "unknown"),
             generation_timestamp=data.get("generation_timestamp", ""),
             version=data.get("version", "1.0"),
+            generator_provider=data.get("generator_provider", ""),
             metadata=data.get("metadata", {}),
         )
 
@@ -135,6 +143,7 @@ class EvaluationDataset:
             return cls(
                 items=items,
                 generator_model="unknown",
+                generator_provider="",
                 generation_timestamp="",
                 version="1.0",
             )
@@ -182,6 +191,8 @@ class DatasetGenerator:
         frontier_client: FrontierClient,
         qna_store: Any | None = None,
         tos_store: Any | None = None,
+        rag_pipeline: Any | None = None,
+        use_pipeline_retrieval: bool = False,
     ) -> None:
         """Initialize the dataset generator.
 
@@ -189,10 +200,14 @@ class DatasetGenerator:
             frontier_client: Client for frontier model API
             qna_store: Optional QnAVectorStore for sampling questions
             tos_store: Optional ToSVectorStore for context
+            rag_pipeline: Optional RAG pipeline for standardized retrieval
+            use_pipeline_retrieval: Use RAG pipeline for context retrieval
         """
         self.client = frontier_client
         self.qna_store = qna_store
         self.tos_store = tos_store
+        self.rag_pipeline = rag_pipeline
+        self.use_pipeline_retrieval = use_pipeline_retrieval
 
     def _generate_id(self, question: str) -> str:
         """Generate a unique ID for a question."""
@@ -228,9 +243,7 @@ class DatasetGenerator:
             Generated golden answer
         """
         context_text = self._format_context(context or [])
-        context_section = (
-            f"[참고 정보]\n{context_text}" if context_text else "[참고 정보]\n(없음)"
-        )
+        context_section = f"[참고 정보]\n{context_text}" if context_text else "[참고 정보]\n(없음)"
 
         prompt = GOLDEN_ANSWER_PROMPT.format(
             context_section=context_section,
@@ -260,13 +273,26 @@ class DatasetGenerator:
             question: The question
             category: Question category
             difficulty: Difficulty level
-            context: Optional context information
+            context: Optional context information (overridden if use_pipeline_retrieval)
             metadata: Optional metadata
 
         Returns:
             EvaluationItem with golden answer
         """
-        golden_answer = self.generate_golden_answer(question, context)
+        generation_context: list[dict[str, Any]] = []
+        expected_sources: list[str] = []
+
+        if self.use_pipeline_retrieval and self.rag_pipeline:
+            retrieved = self._retrieve_context_from_pipeline(question)
+            generation_context = retrieved
+            expected_sources = self._extract_source_ids(retrieved)
+            effective_context = retrieved
+        else:
+            effective_context = context or []
+            generation_context = effective_context
+            expected_sources = self._extract_source_ids(effective_context)
+
+        golden_answer = self.generate_golden_answer(question, effective_context)
 
         return EvaluationItem(
             id=self._generate_id(question),
@@ -275,8 +301,40 @@ class DatasetGenerator:
             category=category,
             difficulty=difficulty,
             source_context=context or [],
+            generation_context=generation_context,
+            expected_sources=expected_sources,
             metadata=metadata or {},
         )
+
+    def _retrieve_context_from_pipeline(self, question: str) -> list[dict[str, Any]]:
+        """Retrieve context using the RAG pipeline."""
+        if not self.rag_pipeline:
+            return []
+
+        try:
+            if hasattr(self.rag_pipeline, "retrieve"):
+                return self.rag_pipeline.retrieve(question)
+            elif hasattr(self.rag_pipeline, "search_qna"):
+                qna_results = self.rag_pipeline.search_qna(question, top_k=3)
+                tos_results = self.rag_pipeline.search_tos(question, top_k=3)
+                return qna_results + tos_results
+            else:
+                logger.warning("RAG pipeline has no retrieve method")
+                return []
+        except Exception as e:
+            logger.warning(f"Pipeline retrieval failed: {e}")
+            return []
+
+    def _extract_source_ids(self, context: list[dict[str, Any]]) -> list[str]:
+        """Extract source identifiers from context items."""
+        sources = []
+        for item in context:
+            source_id = item.get("doc_id") or item.get("id") or item.get("source")
+            if source_id:
+                sources.append(str(source_id))
+            elif "section_title" in item:
+                sources.append(item["section_title"])
+        return sources
 
     def generate_from_questions(
         self,
@@ -316,6 +374,7 @@ class DatasetGenerator:
         return EvaluationDataset(
             items=items,
             generator_model=self.client.model_name,
+            generator_provider=self.client.provider_name,
             generation_timestamp=datetime.now().isoformat(),
             metadata={
                 "source": "questions_list",
@@ -355,9 +414,7 @@ class DatasetGenerator:
             all_qna = [q for q in all_qna if q.get("category") in categories]
 
         if len(all_qna) < n_samples:
-            logger.warning(
-                f"Requested {n_samples} samples but only {len(all_qna)} available"
-            )
+            logger.warning(f"Requested {n_samples} samples but only {len(all_qna)} available")
             n_samples = len(all_qna)
 
         sampled = random.sample(all_qna, n_samples)

@@ -17,35 +17,46 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class EvaluationMetrics:
-    """Container for evaluation metrics of a single QA pair."""
+    """Container for evaluation metrics of a single QA pair.
+
+    Metric naming convention:
+    - verifier_faithfulness: Score from AnswerVerifier (context-based hallucination check)
+    - judge_context_faithfulness: Score from LLM Judge (comparison with golden answer)
+    """
 
     question: str
     expected_answer: str
     generated_answer: str
     category: str
 
-    # Core metrics
     answer_similarity: float = 0.0
     bleu_score: float = 0.0
-    faithfulness: float = 0.0
+    verifier_faithfulness: float = 0.0
 
-    # Performance metrics
     latency_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
 
-    # Verification results
     verified: bool = False
     verification_issues: list[str] = field(default_factory=list)
 
-    # LLM-as-Judge metrics
-    llm_judge_score: float = 0.0  # Overall 1-5 score
-    llm_judge_normalized: float = 0.0  # 0-1 normalized
+    llm_judge_score: float = 0.0
+    llm_judge_normalized: float = 0.0
     llm_correctness: float = 0.0
     llm_helpfulness: float = 0.0
-    llm_faithfulness: float = 0.0
+    judge_context_faithfulness: float = 0.0
     llm_fluency: float = 0.0
     llm_judge_summary: str = ""
+
+    @property
+    def faithfulness(self) -> float:
+        """Deprecated: Use verifier_faithfulness instead."""
+        return self.verifier_faithfulness
+
+    @property
+    def llm_faithfulness(self) -> float:
+        """Deprecated: Use judge_context_faithfulness instead."""
+        return self.judge_context_faithfulness
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -55,18 +66,19 @@ class EvaluationMetrics:
             "category": self.category,
             "answer_similarity": self.answer_similarity,
             "bleu_score": self.bleu_score,
-            "faithfulness": self.faithfulness,
+            "verifier_faithfulness": self.verifier_faithfulness,
+            "faithfulness": self.verifier_faithfulness,
             "latency_ms": self.latency_ms,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "verified": self.verified,
             "verification_issues": self.verification_issues,
-            # LLM-as-Judge metrics
             "llm_judge_score": self.llm_judge_score,
             "llm_judge_normalized": self.llm_judge_normalized,
             "llm_correctness": self.llm_correctness,
             "llm_helpfulness": self.llm_helpfulness,
-            "llm_faithfulness": self.llm_faithfulness,
+            "judge_context_faithfulness": self.judge_context_faithfulness,
+            "llm_faithfulness": self.judge_context_faithfulness,
             "llm_fluency": self.llm_fluency,
             "llm_judge_summary": self.llm_judge_summary,
         }
@@ -113,9 +125,7 @@ class LLMEvaluator:
             try:
                 from sentence_transformers import SentenceTransformer
 
-                self._embeddings = SentenceTransformer(
-                    "intfloat/multilingual-e5-small"
-                )
+                self._embeddings = SentenceTransformer("intfloat/multilingual-e5-small")
                 logger.info("Loaded default embedding model for evaluation")
             except ImportError:
                 logger.warning("sentence-transformers not available")
@@ -236,6 +246,44 @@ class LLMEvaluator:
             logger.warning(f"Verification failed: {e}")
             return 0.5, False, [str(e)]
 
+    def compute_context_overlap(
+        self,
+        retrieved_context: list[dict[str, Any]],
+        expected_sources: list[str],
+    ) -> tuple[float, float]:
+        """Compute overlap between retrieved context and expected sources.
+
+        Args:
+            retrieved_context: Context items retrieved during evaluation
+            expected_sources: Expected source identifiers from golden dataset
+
+        Returns:
+            Tuple of (recall, precision) where:
+            - recall: fraction of expected sources that were retrieved
+            - precision: fraction of retrieved sources that were expected
+        """
+        if not expected_sources:
+            return 1.0, 1.0
+
+        retrieved_ids = set()
+        for item in retrieved_context:
+            source_id = item.get("doc_id") or item.get("id") or item.get("source")
+            if source_id:
+                retrieved_ids.add(str(source_id))
+            if "section_title" in item:
+                retrieved_ids.add(item["section_title"])
+
+        expected_set = set(expected_sources)
+
+        if not retrieved_ids:
+            return 0.0, 0.0
+
+        matches = retrieved_ids & expected_set
+        recall = len(matches) / len(expected_set) if expected_set else 0.0
+        precision = len(matches) / len(retrieved_ids) if retrieved_ids else 0.0
+
+        return recall, precision
+
     def evaluate(
         self,
         question: str,
@@ -285,7 +333,7 @@ class LLMEvaluator:
             category=category,
             answer_similarity=similarity,
             bleu_score=bleu,
-            faithfulness=faithfulness,
+            verifier_faithfulness=faithfulness,
             latency_ms=latency_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -317,7 +365,7 @@ class LLMEvaluator:
             "llm_judge_normalized": 0.0,
             "llm_correctness": 0.0,
             "llm_helpfulness": 0.0,
-            "llm_faithfulness": 0.0,
+            "judge_context_faithfulness": 0.0,
             "llm_fluency": 0.0,
             "llm_judge_summary": "",
         }
@@ -333,12 +381,16 @@ class LLMEvaluator:
                 context=context,
             )
 
+            faithfulness_score = result.get_criterion_score("faithfulness")
+            if faithfulness_score == 0.0:
+                faithfulness_score = result.get_criterion_score("context_faithfulness")
+
             return {
                 "llm_judge_score": result.overall_score,
                 "llm_judge_normalized": result.normalized_score,
                 "llm_correctness": result.get_criterion_score("correctness"),
                 "llm_helpfulness": result.get_criterion_score("helpfulness"),
-                "llm_faithfulness": result.get_criterion_score("faithfulness"),
+                "judge_context_faithfulness": faithfulness_score,
                 "llm_fluency": result.get_criterion_score("fluency"),
                 "llm_judge_summary": result.summary,
             }

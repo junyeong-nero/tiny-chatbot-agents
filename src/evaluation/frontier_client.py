@@ -277,6 +277,144 @@ class FrontierClient:
         return self.config.provider.value
 
 
+class JudgeModelSelector:
+    """Selects a different model for judging than was used for generation.
+
+    This class helps prevent circular evaluation bias by ensuring the judge
+    model is different from the model that generated the golden answers.
+    """
+
+    # Mapping of generator models to recommended judge models
+    # Format: generator_model -> (provider, model)
+    DIVERSE_PAIRS: dict[str, tuple[str, str]] = {
+        # OpenAI generators -> Anthropic judges
+        "gpt-4o": ("anthropic", "claude-sonnet-4-20250514"),
+        "gpt-4o-mini": ("anthropic", "claude-sonnet-4-20250514"),
+        "gpt-4-turbo": ("anthropic", "claude-sonnet-4-20250514"),
+        # Anthropic generators -> OpenAI judges
+        "claude-sonnet-4-20250514": ("openai", "gpt-4o"),
+        "claude-3-opus-20240229": ("openai", "gpt-4o"),
+        "claude-3-sonnet-20240229": ("openai", "gpt-4o"),
+        "claude-3-haiku-20240307": ("openai", "gpt-4o"),
+        # Google generators -> OpenAI judges
+        "gemini-1.5-pro": ("openai", "gpt-4o"),
+        "gemini-1.5-flash": ("openai", "gpt-4o"),
+        "gemini-pro": ("openai", "gpt-4o"),
+    }
+
+    # Fallback mapping by provider
+    PROVIDER_FALLBACKS: dict[str, tuple[str, str]] = {
+        "openai": ("anthropic", "claude-sonnet-4-20250514"),
+        "anthropic": ("openai", "gpt-4o"),
+        "google": ("openai", "gpt-4o"),
+    }
+
+    @classmethod
+    def get_diverse_judge(
+        cls,
+        generator_model: str,
+        generator_provider: str | None = None,
+    ) -> tuple[str, str]:
+        """Get a different model for judging to avoid circular bias.
+
+        Args:
+            generator_model: The model used to generate golden answers
+            generator_provider: Optional provider name for fallback lookup
+
+        Returns:
+            Tuple of (provider, model) for the judge
+        """
+        # Try exact model match first
+        if generator_model in cls.DIVERSE_PAIRS:
+            return cls.DIVERSE_PAIRS[generator_model]
+
+        # Try provider-based fallback
+        if generator_provider and generator_provider in cls.PROVIDER_FALLBACKS:
+            return cls.PROVIDER_FALLBACKS[generator_provider]
+
+        # Default fallback: use GPT-4o
+        logger.warning(
+            f"Unknown generator model '{generator_model}', defaulting to GPT-4o as judge"
+        )
+        return ("openai", "gpt-4o")
+
+    @classmethod
+    def is_same_model(
+        cls,
+        model1: str,
+        model2: str,
+        provider1: str | None = None,
+        provider2: str | None = None,
+    ) -> bool:
+        """Check if two models are effectively the same.
+
+        Args:
+            model1: First model name
+            model2: Second model name
+            provider1: Optional provider for first model
+            provider2: Optional provider for second model
+
+        Returns:
+            True if models are the same or from the same family
+        """
+        # Exact match
+        if model1 == model2:
+            return True
+
+        # Normalize model names for comparison
+        m1_normalized = model1.lower().replace("-", "").replace("_", "")
+        m2_normalized = model2.lower().replace("-", "").replace("_", "")
+
+        if m1_normalized == m2_normalized:
+            return True
+
+        # Check if same provider (different models from same provider may have similar biases)
+        if provider1 and provider2 and provider1 == provider2:
+            logger.warning(
+                f"Models '{model1}' and '{model2}' are from the same provider "
+                f"'{provider1}', which may introduce similar biases"
+            )
+
+        return False
+
+    @classmethod
+    def validate_diversity(
+        cls,
+        generator_model: str,
+        judge_model: str,
+        generator_provider: str | None = None,
+        judge_provider: str | None = None,
+        strict: bool = False,
+    ) -> bool:
+        """Validate that generator and judge models are sufficiently different.
+
+        Args:
+            generator_model: Model used to generate golden answers
+            judge_model: Model used for judging
+            generator_provider: Provider of generator model
+            judge_provider: Provider of judge model
+            strict: If True, raise error on same model; if False, just warn
+
+        Returns:
+            True if models are different, False otherwise
+
+        Raises:
+            ValueError: If strict=True and models are the same
+        """
+        if cls.is_same_model(generator_model, judge_model, generator_provider, judge_provider):
+            msg = (
+                f"Circular evaluation bias detected: generator model '{generator_model}' "
+                f"and judge model '{judge_model}' are the same or similar. "
+                "This may lead to biased evaluation results."
+            )
+            if strict:
+                raise ValueError(msg)
+            logger.warning(msg)
+            return False
+
+        return True
+
+
 def create_frontier_client(
     provider: str = "openai",
     model: str | None = None,

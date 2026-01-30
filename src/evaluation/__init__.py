@@ -28,6 +28,7 @@ from .frontier_client import (
     FrontierClient,
     FrontierModelConfig,
     FrontierProvider,
+    JudgeModelSelector,
     create_frontier_client,
 )
 
@@ -42,6 +43,7 @@ __all__ = [
     "JudgeResult",
     "CriteriaScore",
     "create_llm_judge",
+    "JudgeModelSelector",
     # Dataset generation
     "DatasetGenerator",
     "EvaluationDataset",
