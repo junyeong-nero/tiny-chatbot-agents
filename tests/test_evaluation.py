@@ -136,14 +136,19 @@ class TestEvaluationMetrics:
 class TestLLMJudgeParsing:
     """Tests for LLM Judge JSON parsing."""
 
-    def test_extract_scores_regex_basic(self):
-        """Test regex-based score extraction."""
+    @pytest.fixture
+    def mock_judge(self):
+        """Create LLMJudge with mock client for testing."""
         from src.evaluation.llm_judge import LLMJudge
         from unittest.mock import MagicMock
 
         mock_client = MagicMock()
         mock_client.model_name = "test-model"
-        judge = LLMJudge(mock_client)
+        return LLMJudge(mock_client)
+
+    def test_extract_scores_regex_basic(self, mock_judge):
+        """Test regex-based score extraction."""
+        judge = mock_judge
 
         response = '''
         {
@@ -159,14 +164,9 @@ class TestLLMJudgeParsing:
         assert "helpfulness" in scores
         assert scores["helpfulness"].score == 5.0
 
-    def test_extract_scores_regex_malformed(self):
+    def test_extract_scores_regex_malformed(self, mock_judge):
         """Test regex extraction from malformed JSON."""
-        from src.evaluation.llm_judge import LLMJudge
-        from unittest.mock import MagicMock
-
-        mock_client = MagicMock()
-        mock_client.model_name = "test-model"
-        judge = LLMJudge(mock_client)
+        judge = mock_judge
 
         # Malformed JSON but scores are visible
         response = '''
@@ -180,14 +180,10 @@ class TestLLMJudgeParsing:
         assert scores["correctness"].score == 4.0
         assert overall == 4.5
 
-    def test_parse_response_partial(self):
+    def test_parse_response_partial(self, mock_judge):
         """Test that partial parsing fills missing criteria with defaults."""
-        from src.evaluation.llm_judge import LLMJudge
-        from unittest.mock import MagicMock
-
-        mock_client = MagicMock()
-        mock_client.model_name = "test-model"
-        judge = LLMJudge(mock_client, criteria=["correctness", "helpfulness", "fluency"])
+        judge = mock_judge
+        judge.criteria = ["correctness", "helpfulness", "fluency"]
 
         # Only one criterion present
         response = '{"correctness": {"score": 5, "reasoning": "perfect"}}'
@@ -200,14 +196,9 @@ class TestLLMJudgeParsing:
         assert result.criteria_scores["helpfulness"].score == 3.0
         assert result.criteria_scores["fluency"].score == 3.0
 
-    def test_error_result_uses_neutral_scores(self):
+    def test_error_result_uses_neutral_scores(self, mock_judge):
         """Test that error results use neutral scores (3.0) by default."""
-        from src.evaluation.llm_judge import LLMJudge
-        from unittest.mock import MagicMock
-
-        mock_client = MagicMock()
-        mock_client.model_name = "test-model"
-        judge = LLMJudge(mock_client)
+        judge = mock_judge
 
         result = judge._create_error_result("q", "golden", "generated", "test error")
 

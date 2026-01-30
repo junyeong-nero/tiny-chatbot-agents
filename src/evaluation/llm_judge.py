@@ -12,11 +12,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .frontier_client import FrontierClient
-
-# Retry configuration
-DEFAULT_MAX_RETRIES = 2
-DEFAULT_RETRY_DELAY = 1.0  # seconds
-RETRY_BACKOFF_MULTIPLIER = 2.0
 from .judge_prompts import (
     COMPREHENSIVE_JUDGE_PROMPT,
     CONTEXT_AWARE_CRITERIA,
@@ -27,6 +22,25 @@ from .judge_prompts import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Retry configuration
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_RETRY_DELAY = 1.0  # seconds
+RETRY_BACKOFF_MULTIPLIER = 2.0
+
+
+def _clamp_score(score: float, min_val: float = 1.0, max_val: float = 5.0) -> float:
+    """Clamp score to valid range [min_val, max_val].
+
+    Args:
+        score: Score value to clamp
+        min_val: Minimum allowed value (default: 1.0)
+        max_val: Maximum allowed value (default: 5.0)
+
+    Returns:
+        Clamped score value
+    """
+    return max(min_val, min(max_val, score))
 
 
 @dataclass
@@ -318,7 +332,7 @@ class LLMJudge:
                     try:
                         score = float(data[criterion].get("score", 3))
                         # Clamp score to valid range
-                        score = max(1.0, min(5.0, score))
+                        score = _clamp_score(score)
                         criteria_scores[criterion] = CriteriaScore(
                             criterion=criterion,
                             score=score,
@@ -331,7 +345,7 @@ class LLMJudge:
             if "overall_score" in data:
                 try:
                     overall = float(data["overall_score"])
-                    overall = max(1.0, min(5.0, overall))
+                    overall = _clamp_score(overall)
                 except (ValueError, TypeError):
                     pass
 
@@ -403,7 +417,7 @@ class LLMJudge:
             criterion_name = match.group(1).lower()
             try:
                 score = float(match.group(2))
-                score = max(1.0, min(5.0, score))
+                score = _clamp_score(score)
 
                 # Map to expected criteria names
                 for criterion in criteria:
@@ -426,7 +440,7 @@ class LLMJudge:
         if overall_match:
             try:
                 overall = float(overall_match.group(1))
-                overall = max(1.0, min(5.0, overall))
+                overall = _clamp_score(overall)
             except ValueError:
                 pass
 

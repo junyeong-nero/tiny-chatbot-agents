@@ -23,6 +23,30 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_WORKERS = 4
 
 
+def _safe_mean(values: list) -> float:
+    """Compute mean of values, returning 0.0 for empty lists.
+
+    Args:
+        values: List of numeric values
+
+    Returns:
+        Mean of values or 0.0 if empty
+    """
+    return float(np.mean(values)) if values else 0.0
+
+
+def _safe_std(values: list) -> float:
+    """Compute standard deviation of values, returning 0.0 for empty lists.
+
+    Args:
+        values: List of numeric values
+
+    Returns:
+        Standard deviation of values or 0.0 if empty
+    """
+    return float(np.std(values)) if values else 0.0
+
+
 @dataclass
 class EvaluationResult:
     """Aggregated evaluation results for a model."""
@@ -145,6 +169,53 @@ class EvaluationRunner:
         except Exception as e:
             logger.warning(f"Failed to warm up Korean tokenizer: {e}")
 
+    def _extract_tokens(
+        self,
+        response: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> tuple[int, int]:
+        """Extract input and output token counts from response and metadata.
+
+        Args:
+            response: Pipeline response dictionary
+            metadata: Response metadata dictionary
+
+        Returns:
+            Tuple of (input_tokens, output_tokens)
+        """
+        # Extract input tokens
+        input_tokens = response.get("input_tokens")
+        if input_tokens is None:
+            input_tokens = metadata.get("prompt_tokens", metadata.get("input_tokens", 0))
+        if input_tokens is None:
+            input_tokens = 0
+
+        # Extract output tokens
+        output_tokens = response.get("output_tokens")
+        if output_tokens is None:
+            output_tokens = response.get("completion_tokens")
+
+        if output_tokens is None:
+            completion_tokens = metadata.get("completion_tokens")
+            total_tokens = metadata.get("total_tokens", metadata.get("tokens_used"))
+            if completion_tokens is not None:
+                output_tokens = completion_tokens
+            elif total_tokens is not None:
+                safe_input = int(input_tokens) if isinstance(input_tokens, (int, float)) else 0
+                safe_total = int(total_tokens) if isinstance(total_tokens, (int, float)) else 0
+                output_tokens = max(0, safe_total - safe_input)
+            else:
+                output_tokens = 0
+
+        if output_tokens is None:
+            output_tokens = 0
+
+        # Convert to int
+        input_tokens_int = int(input_tokens) if isinstance(input_tokens, (int, float)) else 0
+        output_tokens_int = int(output_tokens) if isinstance(output_tokens, (int, float)) else 0
+
+        return input_tokens_int, output_tokens_int
+
     def load_dataset(self, path: str | Path | None = None) -> list[dict[str, Any]]:
         """Load evaluation dataset from JSON file.
 
@@ -183,9 +254,7 @@ class EvaluationRunner:
         # Generate answer using pipeline
         start_time = time.perf_counter()
         generated = ""
-        context = []
-        input_tokens = 0
-        output_tokens = 0
+        context: list[Any] = []
         input_tokens_int = 0
         output_tokens_int = 0
 
@@ -196,53 +265,15 @@ class EvaluationRunner:
                     generated = response.get("answer", "")
                     context = response.get("context", [])
                     raw_metadata = response.get("metadata")
-                    metadata: dict[str, Any] = {}
-                    if isinstance(raw_metadata, dict):
-                        metadata = raw_metadata
-                    input_tokens = response.get("input_tokens")
-                    if input_tokens is None:
-                        input_tokens = metadata.get(
-                            "prompt_tokens", metadata.get("input_tokens", 0)
-                        )
-                    if input_tokens is None:
-                        input_tokens = 0
-
-                    output_tokens = response.get("output_tokens")
-                    if output_tokens is None:
-                        output_tokens = response.get("completion_tokens")
-
-                    if output_tokens is None:
-                        completion_tokens = metadata.get("completion_tokens")
-                        total_tokens = metadata.get("total_tokens", metadata.get("tokens_used"))
-                        if completion_tokens is not None:
-                            output_tokens = completion_tokens
-                        elif total_tokens is not None:
-                            safe_input = (
-                                int(input_tokens) if isinstance(input_tokens, (int, float)) else 0
-                            )
-                            safe_total = (
-                                int(total_tokens) if isinstance(total_tokens, (int, float)) else 0
-                            )
-                            output_tokens = max(0, safe_total - safe_input)
-                        else:
-                            output_tokens = 0
-
-                    if output_tokens is None:
-                        output_tokens = 0
+                    metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
+                    input_tokens_int, output_tokens_int = self._extract_tokens(response, metadata)
                 else:
                     generated = response.answer
                     context = response.context
                     raw_metadata = getattr(response, "metadata", None)
                     metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
-                    input_tokens = metadata.get("prompt_tokens", 0)
-                    output_tokens = metadata.get("completion_tokens", 0)
-
-                input_tokens_int = (
-                    int(input_tokens) if isinstance(input_tokens, (int, float)) else 0
-                )
-                output_tokens_int = (
-                    int(output_tokens) if isinstance(output_tokens, (int, float)) else 0
-                )
+                    input_tokens_int = int(metadata.get("prompt_tokens", 0))
+                    output_tokens_int = int(metadata.get("completion_tokens", 0))
             except Exception as e:
                 logger.warning(f"Pipeline query failed: {e}")
                 generated = f"[Error: {e}]"
@@ -459,10 +490,10 @@ class EvaluationRunner:
         for cat, scores in category_scores.items():
             category_aggregated[cat] = {
                 "count": len(scores),
-                "mean_similarity": float(np.mean([s["similarity"] for s in scores])),
-                "mean_bleu": float(np.mean([s["bleu"] for s in scores])),
-                "mean_faithfulness": float(np.mean([s["faithfulness"] for s in scores])),
-                "mean_llm_judge": float(np.mean([s["llm_judge_score"] for s in scores])),
+                "mean_similarity": _safe_mean([s["similarity"] for s in scores]),
+                "mean_bleu": _safe_mean([s["bleu"] for s in scores]),
+                "mean_faithfulness": _safe_mean([s["faithfulness"] for s in scores]),
+                "mean_llm_judge": _safe_mean([s["llm_judge_score"] for s in scores]),
             }
 
         # Get LLM judge model name from evaluator if available
@@ -476,27 +507,21 @@ class EvaluationRunner:
             model_name=model_name,
             total_cases=total_cases,
             evaluated_cases=n,
-            mean_similarity=float(np.mean(similarities)) if similarities else 0.0,
-            mean_bleu=float(np.mean(bleus)) if bleus else 0.0,
-            mean_faithfulness=float(np.mean(faiths)) if faiths else 0.0,
-            mean_latency_ms=float(np.mean(latencies)) if latencies else 0.0,
-            std_similarity=float(np.std(similarities)) if similarities else 0.0,
-            std_bleu=float(np.std(bleus)) if bleus else 0.0,
-            std_latency_ms=float(np.std(latencies)) if latencies else 0.0,
+            mean_similarity=_safe_mean(similarities),
+            mean_bleu=_safe_mean(bleus),
+            mean_faithfulness=_safe_mean(faiths),
+            mean_latency_ms=_safe_mean(latencies),
+            std_similarity=_safe_std(similarities),
+            std_bleu=_safe_std(bleus),
+            std_latency_ms=_safe_std(latencies),
             verified_count=verified_count,
             verification_rate=verified_count / n if n > 0 else 0.0,
             # LLM-judge aggregated metrics
-            mean_llm_judge_score=float(np.mean(llm_judge_scores)) if llm_judge_scores else 0.0,
-            mean_llm_correctness=float(np.mean(llm_correctness_scores))
-            if llm_correctness_scores
-            else 0.0,
-            mean_llm_helpfulness=float(np.mean(llm_helpfulness_scores))
-            if llm_helpfulness_scores
-            else 0.0,
-            mean_llm_faithfulness=float(np.mean(llm_faithfulness_scores))
-            if llm_faithfulness_scores
-            else 0.0,
-            mean_llm_fluency=float(np.mean(llm_fluency_scores)) if llm_fluency_scores else 0.0,
+            mean_llm_judge_score=_safe_mean(llm_judge_scores),
+            mean_llm_correctness=_safe_mean(llm_correctness_scores),
+            mean_llm_helpfulness=_safe_mean(llm_helpfulness_scores),
+            mean_llm_faithfulness=_safe_mean(llm_faithfulness_scores),
+            mean_llm_fluency=_safe_mean(llm_fluency_scores),
             llm_judge_model=llm_judge_model,
             category_scores=category_aggregated,
             case_results=case_results,

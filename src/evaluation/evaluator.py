@@ -6,7 +6,6 @@ against expected answers in the RAG pipeline.
 
 import logging
 import re
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -92,7 +91,6 @@ class EvaluationMetrics:
             "answer_similarity": self.answer_similarity,
             "bleu_score": self.bleu_score,
             "verifier_faithfulness": self.verifier_faithfulness,
-            "faithfulness": self.verifier_faithfulness,
             "latency_ms": self.latency_ms,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
@@ -103,7 +101,6 @@ class EvaluationMetrics:
             "llm_correctness": self.llm_correctness,
             "llm_helpfulness": self.llm_helpfulness,
             "judge_context_faithfulness": self.judge_context_faithfulness,
-            "llm_faithfulness": self.judge_context_faithfulness,
             "llm_fluency": self.llm_fluency,
             "llm_judge_summary": self.llm_judge_summary,
         }
@@ -146,15 +143,21 @@ class LLMEvaluator:
     @property
     def embeddings(self):
         """Lazy load embeddings model."""
-        if self._embeddings is None and self.embedding_model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
+        if self.embedding_model is not None:
+            return self.embedding_model
 
-                self._embeddings = SentenceTransformer("intfloat/multilingual-e5-small")
-                logger.info("Loaded default embedding model for evaluation")
-            except ImportError:
-                logger.warning("sentence-transformers not available")
-        return self._embeddings or self.embedding_model
+        if self._embeddings is not None:
+            return self._embeddings
+
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            self._embeddings = SentenceTransformer("intfloat/multilingual-e5-small")
+            logger.info("Loaded default embedding model for evaluation")
+            return self._embeddings
+        except ImportError:
+            logger.warning("sentence-transformers not available")
+            return None
 
     def compute_similarity(self, text1: str, text2: str) -> float:
         """Compute cosine similarity between two texts using embeddings.
