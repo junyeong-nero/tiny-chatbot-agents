@@ -14,6 +14,31 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Korean tokenizer (lazy loaded)
+_kiwi_tokenizer = None
+
+
+def _get_korean_tokenizer():
+    """Get or create the Korean tokenizer (singleton).
+
+    Uses kiwipiepy for accurate Korean morphological analysis.
+    Falls back to None if kiwipiepy is not installed.
+    """
+    global _kiwi_tokenizer
+    if _kiwi_tokenizer is None:
+        try:
+            from kiwipiepy import Kiwi
+
+            _kiwi_tokenizer = Kiwi()
+            logger.info("Loaded kiwipiepy Korean tokenizer")
+        except ImportError:
+            logger.warning(
+                "kiwipiepy not available. Install with: pip install kiwipiepy. "
+                "Falling back to space-based tokenization."
+            )
+            _kiwi_tokenizer = False  # Mark as attempted but failed
+    return _kiwi_tokenizer if _kiwi_tokenizer else None
+
 
 @dataclass
 class EvaluationMetrics:
@@ -205,7 +230,50 @@ class LLMEvaluator:
         return float(bleu * bp)
 
     def _tokenize(self, text: str) -> list[str]:
-        """Simple tokenization for Korean/mixed text."""
+        """Tokenize text for BLEU computation.
+
+        Uses kiwipiepy morphological analyzer for Korean text when available,
+        which provides accurate token boundaries for Korean language.
+        Falls back to space-based tokenization if kiwipiepy is not installed.
+
+        Args:
+            text: Input text to tokenize
+
+        Returns:
+            List of tokens
+        """
+        kiwi = _get_korean_tokenizer()
+        if kiwi is not None:
+            return self._tokenize_korean(text, kiwi)
+        return self._tokenize_simple(text)
+
+    def _tokenize_korean(self, text: str, kiwi) -> list[str]:
+        """Tokenize using kiwipiepy morphological analyzer.
+
+        Extracts morphemes from Korean text for accurate n-gram matching.
+        Filters out punctuation and whitespace tokens.
+
+        Args:
+            text: Input text
+            kiwi: Kiwi tokenizer instance
+
+        Returns:
+            List of morpheme tokens
+        """
+        tokens = []
+        for token in kiwi.tokenize(text):
+            # token.form is the surface form, token.tag is the POS tag
+            form = token.form.strip()
+            # Skip punctuation (SF, SP, SS, SE, SO, SW) and whitespace
+            if form and token.tag not in ("SF", "SP", "SS", "SE", "SO", "SW"):
+                tokens.append(form)
+        return tokens
+
+    def _tokenize_simple(self, text: str) -> list[str]:
+        """Simple space-based tokenization fallback.
+
+        Used when kiwipiepy is not available.
+        """
         # Remove special characters but keep Korean and alphanumeric
         text = re.sub(r"[^\w\s가-힣]", " ", text)
         return text.split()

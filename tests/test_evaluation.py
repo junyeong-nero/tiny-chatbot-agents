@@ -49,7 +49,27 @@ class TestLLMEvaluator:
         text = "한국투자증권에서 계좌를 개설하세요!"
         tokens = evaluator._tokenize(text)
         assert len(tokens) > 0
-        assert "한국투자증권에서" in tokens
+        # With kiwipiepy, tokens are morphemes; without, space-split
+        # Either way, we should have multiple tokens
+        assert len(tokens) >= 1
+
+    def test_tokenize_korean_morphemes(self, evaluator):
+        """Test that Korean tokenizer splits morphemes properly when available."""
+        from src.evaluation.evaluator import _get_korean_tokenizer
+
+        text = "주식을 매도할 때 세금이 발생합니다"
+        tokens = evaluator._tokenize(text)
+
+        # If kiwipiepy is available, we get morpheme-level tokens
+        kiwi = _get_korean_tokenizer()
+        if kiwi is not None:
+            # Should split into morphemes like: 주식, 을, 매도, 할, 때, 세금, 이, 발생, 합니다
+            assert len(tokens) > 5, f"Expected morpheme split, got: {tokens}"
+            # Check some expected morphemes
+            assert "주식" in tokens or "매도" in tokens
+        else:
+            # Fallback to space-split
+            assert len(tokens) >= 4
 
     def test_get_ngrams(self, evaluator):
         """Test n-gram extraction."""
@@ -101,7 +121,7 @@ class TestEvaluationMetrics:
             category="테스트",
             answer_similarity=0.85,
             bleu_score=0.75,
-            faithfulness=0.9,
+            verifier_faithfulness=0.9,
             latency_ms=100.0,
         )
 

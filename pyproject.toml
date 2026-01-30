@@ -33,6 +33,7 @@ evaluation = [
     "openai>=1.0.0",
     "anthropic>=0.18.0",
     "google-generativeai>=0.4.0",
+    "kiwipiepy>=0.18.0",
 ]
 all = [
     "openai>=1.0.0",
