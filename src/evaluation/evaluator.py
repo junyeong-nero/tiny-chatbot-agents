@@ -4,12 +4,17 @@ This module provides metrics for evaluating LLM-generated answers
 against expected answers in the RAG pipeline.
 """
 
+from __future__ import annotations
+
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .config import EvaluationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -18,26 +23,57 @@ _kiwi_tokenizer = None
 
 # Embedding model (lazy loaded singleton)
 _embedding_model = None
+_embedding_model_name: str | None = None
 
 
-def _get_embedding_model(model_name: str = "intfloat/multilingual-e5-small"):
+def _get_config() -> "EvaluationConfig":
+    """Get evaluation config (lazy import to avoid circular dependency)."""
+    from .config import get_config
+
+    return get_config()
+
+
+def _get_embedding_model_name() -> str:
+    """Get embedding model name from config.
+
+    Returns:
+        Embedding model name
+    """
+    try:
+        config = _get_config()
+        return config.embedding.model
+    except Exception:
+        return "intfloat/multilingual-e5-small"
+
+
+def _get_embedding_model(model_name: str | None = None):
     """Get or create the embedding model (singleton).
 
     Uses sentence-transformers for semantic similarity.
     Falls back to None if sentence-transformers is not installed.
 
     Args:
-        model_name: Name of the embedding model to load
+        model_name: Name of the embedding model to load (uses config default if not provided)
 
     Returns:
         SentenceTransformer instance or None
     """
-    global _embedding_model
+    global _embedding_model, _embedding_model_name
+
+    # Get model name from config if not provided
+    if model_name is None:
+        model_name = _get_embedding_model_name()
+
+    # Reload if model name changed
+    if _embedding_model is not None and _embedding_model_name != model_name:
+        _embedding_model = None
+
     if _embedding_model is None:
         try:
             from sentence_transformers import SentenceTransformer
 
             _embedding_model = SentenceTransformer(model_name)
+            _embedding_model_name = model_name
             logger.info(f"Loaded embedding model: {model_name}")
         except ImportError:
             logger.warning(

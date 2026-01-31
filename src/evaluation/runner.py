@@ -4,6 +4,8 @@ This module provides the EvaluationRunner class for running
 evaluation across multiple test cases and models.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import time
@@ -11,16 +13,45 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from .evaluator import EvaluationMetrics, LLMEvaluator
 from .schemas import validate_dataset
 
+if TYPE_CHECKING:
+    from .config import EvaluationConfig
+
 logger = logging.getLogger(__name__)
 
-# Default number of parallel workers
+
+def _get_config() -> "EvaluationConfig":
+    """Get evaluation config (lazy import to avoid circular dependency)."""
+    from .config import get_config
+
+    return get_config()
+
+
+def _get_runner_config() -> tuple[bool, int, bool, int]:
+    """Get runner configuration from config file.
+
+    Returns:
+        Tuple of (parallel, max_workers, show_progress, progress_interval)
+    """
+    try:
+        config = _get_config()
+        return (
+            config.runner.parallel,
+            config.runner.max_workers,
+            config.runner.show_progress,
+            config.runner.progress_interval,
+        )
+    except Exception:
+        return (False, 4, True, 10)
+
+
+# Default number of parallel workers (fallback)
 DEFAULT_MAX_WORKERS = 4
 
 
@@ -154,6 +185,8 @@ class EvaluationRunner:
 
     Loads evaluation dataset, runs RAG pipeline with specified LLM,
     collects metrics, and aggregates results.
+
+    Configuration is loaded from evaluation_config.yaml by default.
     """
 
     def __init__(
@@ -167,12 +200,26 @@ class EvaluationRunner:
         Args:
             pipeline: RAGPipeline instance
             evaluator: LLMEvaluator instance (created if not provided)
-            dataset_path: Path to evaluation dataset JSON
+            dataset_path: Path to evaluation dataset JSON (uses config default if not provided)
         """
         self.pipeline = pipeline
         self.evaluator = evaluator or LLMEvaluator()
+
+        # Get dataset path from config if not provided
+        if dataset_path is None:
+            try:
+                config = _get_config()
+                dataset_path = config.dataset.path
+            except Exception:
+                pass
+
         self.dataset_path = Path(dataset_path) if dataset_path else None
         self.dataset: list[dict[str, Any]] = []
+
+        # Load runner config
+        self._parallel, self._max_workers, self._show_progress, self._progress_interval = (
+            _get_runner_config()
+        )
 
     def _warmup_evaluator(self) -> None:
         """Pre-initialize lazy-loaded models for thread-safe parallel execution.
@@ -253,13 +300,13 @@ class EvaluationRunner:
     def load_dataset(
         self,
         path: str | Path | None = None,
-        validate: bool = True,
+        validate: bool | None = None,
     ) -> list[dict[str, Any]]:
         """Load evaluation dataset from JSON file.
 
         Args:
             path: Path to dataset JSON (overrides init path)
-            validate: Whether to validate dataset schema (requires pydantic)
+            validate: Whether to validate dataset schema (uses config default if not provided)
 
         Returns:
             List of test cases
@@ -271,6 +318,14 @@ class EvaluationRunner:
         dataset_path = Path(path) if path else self.dataset_path
         if not dataset_path or not dataset_path.exists():
             raise FileNotFoundError(f"Dataset not found: {dataset_path}")
+
+        # Get validation setting from config if not provided
+        if validate is None:
+            try:
+                config = _get_config()
+                validate = config.dataset.validate
+            except Exception:
+                validate = True
 
         with open(dataset_path, encoding="utf-8") as f:
             raw_data = json.load(f)
@@ -356,7 +411,7 @@ class EvaluationRunner:
         dataset: list[dict[str, Any]] | None = None,
         limit: int | None = None,
         model_name: str = "unknown",
-        parallel: bool = False,
+        parallel: bool | None = None,
         max_workers: int | None = None,
     ) -> EvaluationResult:
         """Run evaluation on the full dataset.
@@ -365,8 +420,8 @@ class EvaluationRunner:
             dataset: Optional dataset to use (overrides loaded dataset)
             limit: Optional limit on number of test cases
             model_name: Name of the model being evaluated
-            parallel: Whether to run evaluation in parallel (default: False)
-            max_workers: Maximum number of parallel workers (default: 4)
+            parallel: Whether to run evaluation in parallel (uses config default if not provided)
+            max_workers: Maximum number of parallel workers (uses config default if not provided)
 
         Returns:
             EvaluationResult with aggregated metrics
@@ -378,8 +433,12 @@ class EvaluationRunner:
         if limit:
             test_cases = test_cases[:limit]
 
-        if parallel:
-            return self._run_parallel(test_cases, model_name, max_workers)
+        # Use config defaults if not provided
+        use_parallel = parallel if parallel is not None else self._parallel
+        workers = max_workers if max_workers is not None else self._max_workers
+
+        if use_parallel:
+            return self._run_parallel(test_cases, model_name, workers)
         return self._run_sequential(test_cases, model_name)
 
     def _run_sequential(
@@ -399,13 +458,14 @@ class EvaluationRunner:
         logger.info(f"Running sequential evaluation on {len(test_cases)} test cases")
 
         all_metrics: list[EvaluationMetrics] = []
+        progress_interval = self._progress_interval
 
         for i, test_case in enumerate(test_cases):
             try:
                 metrics = self.run_single(test_case)
                 all_metrics.append(metrics)
 
-                if (i + 1) % 10 == 0:
+                if self._show_progress and (i + 1) % progress_interval == 0:
                     logger.info(f"Evaluated {i + 1}/{len(test_cases)} cases")
 
             except Exception as e:
@@ -430,7 +490,10 @@ class EvaluationRunner:
         Returns:
             EvaluationResult with aggregated metrics
         """
-        workers = max_workers or DEFAULT_MAX_WORKERS
+        workers = max_workers or self._max_workers or DEFAULT_MAX_WORKERS
+        progress_interval = self._progress_interval
+        show_progress = self._show_progress
+
         logger.info(
             f"Running parallel evaluation on {len(test_cases)} test cases "
             f"with {workers} workers"
@@ -451,7 +514,7 @@ class EvaluationRunner:
                 metrics = self.run_single(test_case)
                 with progress_lock:
                     completed_count += 1
-                    if completed_count % 10 == 0:
+                    if show_progress and completed_count % progress_interval == 0:
                         logger.info(f"Evaluated {completed_count}/{len(test_cases)} cases")
                 return metrics
             except Exception as e:
@@ -613,17 +676,35 @@ class EvaluationRunner:
     def save_results(
         self,
         result: EvaluationResult,
-        output_path: str | Path,
+        output_path: str | Path | None = None,
+        filename: str | None = None,
     ) -> Path:
         """Save evaluation results to JSON file.
 
         Args:
             result: EvaluationResult to save
-            output_path: Output file path
+            output_path: Output file path (uses config default directory if not provided)
+            filename: Optional filename (auto-generated if not provided)
 
         Returns:
             Path to saved file
         """
+        if output_path is None:
+            # Get output directory from config
+            try:
+                config = _get_config()
+                output_dir = Path(config.output.directory)
+            except Exception:
+                output_dir = Path("data/evaluation/results")
+
+            # Generate filename if not provided
+            if filename is None:
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                model_slug = result.model_name.replace("/", "_").replace(" ", "_")
+                filename = f"eval_{model_slug}_{timestamp}.json"
+
+            output_path = output_dir / filename
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 

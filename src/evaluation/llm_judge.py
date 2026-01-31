@@ -4,12 +4,14 @@ This module implements LLM-based evaluation of generated answers
 against golden (reference) answers using various quality criteria.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .frontier_client import FrontierClient
 from .judge_prompts import (
@@ -21,25 +23,74 @@ from .judge_prompts import (
     JUDGE_SYSTEM_PROMPT,
 )
 
+if TYPE_CHECKING:
+    from .config import EvaluationConfig
+
 logger = logging.getLogger(__name__)
 
-# Retry configuration
+
+def _get_config() -> "EvaluationConfig":
+    """Get evaluation config (lazy import to avoid circular dependency)."""
+    from .config import get_config
+
+    return get_config()
+
+
+def _get_retry_config() -> tuple[int, float, float]:
+    """Get retry configuration from config file.
+
+    Returns:
+        Tuple of (max_retries, retry_delay, backoff_multiplier)
+    """
+    try:
+        config = _get_config()
+        return (
+            config.judge.max_retries,
+            config.judge.retry_delay,
+            config.judge.retry_backoff_multiplier,
+        )
+    except Exception:
+        return (2, 1.0, 2.0)
+
+
+def _get_scoring_config() -> tuple[float, float, float]:
+    """Get scoring configuration from config file.
+
+    Returns:
+        Tuple of (min_score, max_score, neutral_score)
+    """
+    try:
+        config = _get_config()
+        return (
+            config.scoring.min_score,
+            config.scoring.max_score,
+            config.scoring.neutral_score,
+        )
+    except Exception:
+        return (1.0, 5.0, 3.0)
+
+
+# Default retry configuration (fallbacks)
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_RETRY_DELAY = 1.0  # seconds
 RETRY_BACKOFF_MULTIPLIER = 2.0
 
 
-def _clamp_score(score: float, min_val: float = 1.0, max_val: float = 5.0) -> float:
+def _clamp_score(score: float, min_val: float | None = None, max_val: float | None = None) -> float:
     """Clamp score to valid range [min_val, max_val].
 
     Args:
         score: Score value to clamp
-        min_val: Minimum allowed value (default: 1.0)
-        max_val: Maximum allowed value (default: 5.0)
+        min_val: Minimum allowed value (uses config default if not provided)
+        max_val: Maximum allowed value (uses config default if not provided)
 
     Returns:
         Clamped score value
     """
+    if min_val is None or max_val is None:
+        config_min, config_max, _ = _get_scoring_config()
+        min_val = min_val if min_val is not None else config_min
+        max_val = max_val if max_val is not None else config_max
     return max(min_val, min(max_val, score))
 
 
@@ -562,16 +613,18 @@ class LLMJudge:
 
 
 def create_llm_judge(
-    provider: str = "openai",
+    provider: str | None = None,
     model: str | None = None,
     criteria: list[str] | None = None,
-    use_comprehensive: bool = True,
+    use_comprehensive: bool | None = None,
     generator_model: str | None = None,
     generator_provider: str | None = None,
-    auto_diverse: bool = False,
-    strict_diversity: bool = True,
+    auto_diverse: bool | None = None,
+    strict_diversity: bool | None = None,
 ) -> LLMJudge:
     """Factory function to create an LLM judge.
+
+    All parameters use config defaults if not provided.
 
     Args:
         provider: Provider name ('openai', 'anthropic', 'google')
@@ -581,17 +634,43 @@ def create_llm_judge(
         generator_model: Model used for golden answer generation (for diversity check)
         generator_provider: Provider of generator model (for diversity check)
         auto_diverse: Auto-select a different model from the generator
-        strict_diversity: Raise error if generator and judge are the same model (default: True)
+        strict_diversity: Raise error if generator and judge are the same model
 
     Returns:
         Configured LLMJudge
     """
     from .frontier_client import JudgeModelSelector, create_frontier_client
 
-    final_provider = provider
-    final_model = model
+    # Get config defaults
+    try:
+        config = _get_config()
+        config_provider = config.judge.provider
+        config_model = config.judge.model
+        config_criteria = config.judge.criteria
+        config_use_comprehensive = config.judge.use_comprehensive
+        config_auto_diverse = config.judge.auto_diverse
+        config_strict_diversity = config.judge.strict_diversity
+        config_max_retries = config.judge.max_retries
+        config_retry_delay = config.judge.retry_delay
+    except Exception:
+        config_provider = "openai"
+        config_model = "gpt-4o"
+        config_criteria = ["correctness", "helpfulness", "faithfulness", "fluency"]
+        config_use_comprehensive = True
+        config_auto_diverse = True
+        config_strict_diversity = True
+        config_max_retries = 2
+        config_retry_delay = 1.0
 
-    if auto_diverse and generator_model:
+    # Apply config defaults for None values
+    final_provider = provider if provider is not None else config_provider
+    final_model = model if model is not None else config_model
+    final_criteria = criteria if criteria is not None else config_criteria
+    final_use_comprehensive = use_comprehensive if use_comprehensive is not None else config_use_comprehensive
+    final_auto_diverse = auto_diverse if auto_diverse is not None else config_auto_diverse
+    final_strict_diversity = strict_diversity if strict_diversity is not None else config_strict_diversity
+
+    if final_auto_diverse and generator_model:
         diverse_provider, diverse_model = JudgeModelSelector.get_diverse_judge(
             generator_model=generator_model,
             generator_provider=generator_provider,
@@ -603,30 +682,40 @@ def create_llm_judge(
             f"(generator was {generator_provider}/{generator_model})"
         )
     elif generator_model:
-        resolved_model = model or _get_default_model(provider)
+        resolved_model = final_model or _get_default_model(final_provider)
         JudgeModelSelector.validate_diversity(
             generator_model=generator_model,
             judge_model=resolved_model,
             generator_provider=generator_provider,
-            judge_provider=provider,
-            strict=strict_diversity,
+            judge_provider=final_provider,
+            strict=final_strict_diversity,
         )
 
     client = create_frontier_client(
         provider=final_provider,
         model=final_model,
-        temperature=0.0,
     )
 
     return LLMJudge(
         frontier_client=client,
-        criteria=criteria,
-        use_comprehensive=use_comprehensive,
+        criteria=final_criteria,
+        use_comprehensive=final_use_comprehensive,
+        max_retries=config_max_retries,
+        retry_delay=config_retry_delay,
     )
 
 
 def _get_default_model(provider: str) -> str:
-    """Get the default model for a provider."""
+    """Get the default model for a provider from config."""
+    try:
+        config = _get_config()
+        provider_default = config.get_provider_default(provider)
+        if provider_default:
+            return provider_default.model
+    except Exception:
+        pass
+
+    # Fallback defaults
     defaults = {
         "openai": "gpt-4o",
         "anthropic": "claude-sonnet-4-20250514",

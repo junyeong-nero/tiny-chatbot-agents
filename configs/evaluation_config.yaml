@@ -1,0 +1,109 @@
+# Evaluation Pipeline Configuration
+# Settings for LLM-as-a-Judge evaluation and metrics computation
+
+# Dataset settings
+dataset:
+  path: "data/evaluation/evaluation_dataset_v1.json"
+  validate: true  # Validate dataset schema (requires pydantic)
+
+# LLM Judge settings (for LLM-as-a-Judge evaluation)
+judge:
+  enabled: true
+  provider: "openai"  # openai, anthropic, google
+  model: "gpt-4o"     # Model for judging (will auto-select diverse model if auto_diverse=true)
+  temperature: 0.0
+  max_tokens: 2048
+
+  # Evaluation criteria
+  criteria:
+    - "correctness"
+    - "helpfulness"
+    - "faithfulness"
+    - "fluency"
+
+  # Prompt settings
+  use_comprehensive: true  # Use single comprehensive prompt (more efficient)
+
+  # Retry settings
+  max_retries: 2
+  retry_delay: 1.0  # seconds
+  retry_backoff_multiplier: 2.0
+
+  # Diversity settings (prevent circular evaluation bias)
+  auto_diverse: true     # Auto-select different model from generator
+  strict_diversity: true  # Raise error if generator and judge are same model
+
+# Target model settings (model being evaluated via RAG pipeline)
+target:
+  provider: "openai"  # vllm, sglang, ollama, openai
+  base_url: "http://localhost:8000/v1"
+  model: "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
+  temperature: 0.1
+  max_tokens: 1024
+
+# Embedding model settings (for similarity computation)
+embedding:
+  model: "intfloat/multilingual-e5-small"  # Smaller model for evaluation (faster)
+
+# Runner settings
+runner:
+  parallel: false     # Run evaluation in parallel
+  max_workers: 4      # Maximum parallel workers
+  show_progress: true
+  progress_interval: 10  # Log progress every N cases
+
+# Score settings
+scoring:
+  min_score: 1.0  # Minimum score (1-5 scale)
+  max_score: 5.0  # Maximum score (1-5 scale)
+  neutral_score: 3.0  # Score used for errors/missing values
+
+# Output settings
+output:
+  directory: "data/evaluation/results"
+  include_case_results: true
+  include_category_breakdown: true
+
+# Provider-specific default models
+provider_defaults:
+  openai:
+    model: "gpt-4o"
+    api_key_env: "OPENAI_API_KEY"
+  anthropic:
+    model: "claude-sonnet-4-20250514"
+    api_key_env: "ANTHROPIC_API_KEY"
+  google:
+    model: "gemini-1.5-pro"
+    api_key_env: "GOOGLE_API_KEY"
+
+# Model diversity pairs (generator -> judge mapping to avoid circular bias)
+diversity_pairs:
+  # OpenAI generators -> Anthropic judges
+  gpt-4o:
+    provider: "anthropic"
+    model: "claude-sonnet-4-20250514"
+  gpt-4o-mini:
+    provider: "anthropic"
+    model: "claude-sonnet-4-20250514"
+  gpt-4-turbo:
+    provider: "anthropic"
+    model: "claude-sonnet-4-20250514"
+
+  # Anthropic generators -> OpenAI judges
+  claude-sonnet-4-20250514:
+    provider: "openai"
+    model: "gpt-4o"
+  claude-3-opus-20240229:
+    provider: "openai"
+    model: "gpt-4o"
+  claude-3-sonnet-20240229:
+    provider: "openai"
+    model: "gpt-4o"
+
+  # Google generators -> OpenAI judges
+  gemini-1.5-pro:
+    provider: "openai"
+    model: "gpt-4o"
+  gemini-1.5-flash:
+    provider: "openai"
+    model: "gpt-4o"

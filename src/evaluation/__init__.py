@@ -6,6 +6,7 @@ This package provides tools for:
 - LLM-as-a-Judge evaluation using frontier models
 - Generating evaluation datasets with golden answers
 - Running batch evaluations and generating reports
+- Configuration management via YAML files
 """
 
 from .evaluator import EvaluationMetrics, LLMEvaluator
@@ -32,6 +33,21 @@ from .frontier_client import (
     create_frontier_client,
 )
 
+# Configuration
+from .config import (
+    EvaluationConfig,
+    JudgeConfig,
+    RunnerConfig,
+    DatasetConfig,
+    ScoringConfig,
+    OutputConfig,
+    EmbeddingConfig,
+    TargetConfig,
+    get_config,
+    reset_config,
+    create_evaluation_runner_from_config,
+)
+
 __all__ = [
     # Core evaluation
     "LLMEvaluator",
@@ -55,4 +71,16 @@ __all__ = [
     "FrontierModelConfig",
     "FrontierProvider",
     "create_frontier_client",
+    # Configuration
+    "EvaluationConfig",
+    "JudgeConfig",
+    "RunnerConfig",
+    "DatasetConfig",
+    "ScoringConfig",
+    "OutputConfig",
+    "EmbeddingConfig",
+    "TargetConfig",
+    "get_config",
+    "reset_config",
+    "create_evaluation_runner_from_config",
 ]

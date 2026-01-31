@@ -4,14 +4,26 @@ This module provides a unified interface for calling frontier model APIs
 for golden answer generation and LLM-as-a-Judge evaluation.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .config import EvaluationConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _get_config() -> "EvaluationConfig":
+    """Get evaluation config (lazy import to avoid circular dependency)."""
+    from .config import get_config
+
+    return get_config()
 
 
 class FrontierProvider(Enum):
@@ -282,32 +294,33 @@ class JudgeModelSelector:
 
     This class helps prevent circular evaluation bias by ensuring the judge
     model is different from the model that generated the golden answers.
+
+    Uses configuration from evaluation_config.yaml for diversity pairs.
     """
 
-    # Mapping of generator models to recommended judge models
-    # Format: generator_model -> (provider, model)
-    DIVERSE_PAIRS: dict[str, tuple[str, str]] = {
-        # OpenAI generators -> Anthropic judges
-        "gpt-4o": ("anthropic", "claude-sonnet-4-20250514"),
-        "gpt-4o-mini": ("anthropic", "claude-sonnet-4-20250514"),
-        "gpt-4-turbo": ("anthropic", "claude-sonnet-4-20250514"),
-        # Anthropic generators -> OpenAI judges
-        "claude-sonnet-4-20250514": ("openai", "gpt-4o"),
-        "claude-3-opus-20240229": ("openai", "gpt-4o"),
-        "claude-3-sonnet-20240229": ("openai", "gpt-4o"),
-        "claude-3-haiku-20240307": ("openai", "gpt-4o"),
-        # Google generators -> OpenAI judges
-        "gemini-1.5-pro": ("openai", "gpt-4o"),
-        "gemini-1.5-flash": ("openai", "gpt-4o"),
-        "gemini-pro": ("openai", "gpt-4o"),
-    }
-
-    # Fallback mapping by provider
+    # Fallback mapping by provider (used when config not available)
     PROVIDER_FALLBACKS: dict[str, tuple[str, str]] = {
         "openai": ("anthropic", "claude-sonnet-4-20250514"),
         "anthropic": ("openai", "gpt-4o"),
         "google": ("openai", "gpt-4o"),
     }
+
+    @classmethod
+    def _get_diversity_pairs_from_config(cls) -> dict[str, tuple[str, str]]:
+        """Get diversity pairs from config file.
+
+        Returns:
+            Dictionary mapping generator model -> (provider, model)
+        """
+        try:
+            config = _get_config()
+            pairs = {}
+            for model, mapping in config.diversity_pairs.items():
+                pairs[model] = (mapping.provider, mapping.model)
+            return pairs
+        except Exception as e:
+            logger.debug(f"Could not load diversity pairs from config: {e}")
+            return {}
 
     @classmethod
     def get_diverse_judge(
@@ -324,9 +337,12 @@ class JudgeModelSelector:
         Returns:
             Tuple of (provider, model) for the judge
         """
+        # Try to get diversity pairs from config
+        diversity_pairs = cls._get_diversity_pairs_from_config()
+
         # Try exact model match first
-        if generator_model in cls.DIVERSE_PAIRS:
-            return cls.DIVERSE_PAIRS[generator_model]
+        if generator_model in diversity_pairs:
+            return diversity_pairs[generator_model]
 
         # Try provider-based fallback
         if generator_provider and generator_provider in cls.PROVIDER_FALLBACKS:
@@ -415,50 +431,73 @@ class JudgeModelSelector:
         return True
 
 
+def _get_provider_defaults(provider: str) -> tuple[str, str]:
+    """Get default model and API key env for a provider from config.
+
+    Args:
+        provider: Provider name
+
+    Returns:
+        Tuple of (default_model, api_key_env)
+    """
+    # Hardcoded fallbacks
+    fallbacks = {
+        "openai": ("gpt-4o", "OPENAI_API_KEY"),
+        "anthropic": ("claude-sonnet-4-20250514", "ANTHROPIC_API_KEY"),
+        "google": ("gemini-1.5-pro", "GOOGLE_API_KEY"),
+    }
+
+    try:
+        config = _get_config()
+        provider_default = config.get_provider_default(provider)
+        if provider_default:
+            return (provider_default.model, provider_default.api_key_env)
+    except Exception as e:
+        logger.debug(f"Could not load provider defaults from config: {e}")
+
+    return fallbacks.get(provider, ("gpt-4o", "OPENAI_API_KEY"))
+
+
 def create_frontier_client(
     provider: str = "openai",
     model: str | None = None,
-    temperature: float = 0.0,
-    max_tokens: int = 2048,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> FrontierClient:
     """Factory function to create a frontier client.
 
     Args:
         provider: Provider name ('openai', 'anthropic', 'google')
-        model: Optional model override
-        temperature: Sampling temperature
-        max_tokens: Maximum tokens
+        model: Optional model override (uses config default if not provided)
+        temperature: Sampling temperature (uses config default if not provided)
+        max_tokens: Maximum tokens (uses config default if not provided)
 
     Returns:
         Configured FrontierClient
     """
     provider_enum = FrontierProvider(provider.lower())
 
-    if provider_enum == FrontierProvider.OPENAI:
-        config = FrontierModelConfig(
-            provider=provider_enum,
-            model=model or "gpt-4o",
-            api_key_env="OPENAI_API_KEY",
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    elif provider_enum == FrontierProvider.ANTHROPIC:
-        config = FrontierModelConfig(
-            provider=provider_enum,
-            model=model or "claude-sonnet-4-20250514",
-            api_key_env="ANTHROPIC_API_KEY",
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    elif provider_enum == FrontierProvider.GOOGLE:
-        config = FrontierModelConfig(
-            provider=provider_enum,
-            model=model or "gemini-1.5-pro",
-            api_key_env="GOOGLE_API_KEY",
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
+    # Get defaults from config
+    default_model, api_key_env = _get_provider_defaults(provider)
 
-    return FrontierClient(config)
+    # Get temperature and max_tokens from config if not provided
+    try:
+        eval_config = _get_config()
+        config_temperature = eval_config.judge.temperature
+        config_max_tokens = eval_config.judge.max_tokens
+    except Exception:
+        config_temperature = 0.0
+        config_max_tokens = 2048
+
+    final_temperature = temperature if temperature is not None else config_temperature
+    final_max_tokens = max_tokens if max_tokens is not None else config_max_tokens
+
+    model_config = FrontierModelConfig(
+        provider=provider_enum,
+        model=model or default_model,
+        api_key_env=api_key_env,
+        temperature=final_temperature,
+        max_tokens=final_max_tokens,
+    )
+
+    return FrontierClient(model_config)
