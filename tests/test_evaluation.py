@@ -299,5 +299,348 @@ class TestEvaluationRunner:
         assert abs(seq_result.mean_bleu - par_result.mean_bleu) < 0.01
 
 
+class TestLLMJudgeComprehensive:
+    """Tests for LLMJudge comprehensive evaluation."""
+
+    @pytest.fixture
+    def mock_judge(self):
+        """Create LLMJudge with mock client for testing."""
+        from src.evaluation.llm_judge import LLMJudge
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_client.model_name = "test-model"
+        return LLMJudge(mock_client)
+
+    def test_comprehensive_judgment_success(self, mock_judge):
+        """Test successful comprehensive judgment."""
+        mock_judge.client.generate.return_value = json.dumps({
+            "correctness": {"score": 4, "reasoning": "Mostly correct"},
+            "helpfulness": {"score": 5, "reasoning": "Very helpful"},
+            "faithfulness": {"score": 4, "reasoning": "Faithful to context"},
+            "fluency": {"score": 5, "reasoning": "Well written"},
+            "overall_score": 4.5,
+            "summary": "Good answer overall",
+        })
+
+        result = mock_judge.judge(
+            question="테스트 질문",
+            golden_answer="정답",
+            generated_answer="생성 답변",
+        )
+
+        assert result.overall_score == 4.5
+        assert result.criteria_scores["correctness"].score == 4.0
+        assert result.criteria_scores["helpfulness"].score == 5.0
+        assert result.normalized_score == 0.875  # (4.5 - 1) / 4
+
+    def test_judgment_with_context(self, mock_judge):
+        """Test judgment with retrieval context."""
+        mock_judge.client.generate.return_value = json.dumps({
+            "correctness": {"score": 5, "reasoning": "Perfect"},
+            "helpfulness": {"score": 5, "reasoning": "Excellent"},
+            "context_faithfulness": {"score": 5, "reasoning": "Fully grounded"},
+            "fluency": {"score": 5, "reasoning": "Natural"},
+            "overall_score": 5.0,
+        })
+
+        context = [
+            {"section_title": "약관 제1조", "section_content": "관련 내용"},
+        ]
+
+        result = mock_judge.judge(
+            question="질문",
+            golden_answer="답변",
+            generated_answer="생성 답변",
+            context=context,
+        )
+
+        assert result.overall_score == 5.0
+        # Verify generate was called with context-aware prompt
+        call_args = mock_judge.client.generate.call_args[0][0]
+        assert any("컨텍스트" in msg.get("content", "") or "context" in msg.get("content", "").lower()
+                   for msg in call_args)
+
+    def test_judgment_json_in_code_block(self, mock_judge):
+        """Test parsing JSON wrapped in markdown code block."""
+        mock_judge.client.generate.return_value = '''```json
+{
+    "correctness": {"score": 4, "reasoning": "Good"},
+    "helpfulness": {"score": 4, "reasoning": "Helpful"},
+    "faithfulness": {"score": 4, "reasoning": "Accurate"},
+    "fluency": {"score": 4, "reasoning": "Clear"},
+    "overall_score": 4.0
+}
+```'''
+
+        result = mock_judge.judge(
+            question="q", golden_answer="a", generated_answer="b"
+        )
+
+        assert result.overall_score == 4.0
+        assert result.criteria_scores["correctness"].score == 4.0
+
+
+class TestJudgeModelSelector:
+    """Tests for JudgeModelSelector diversity checking."""
+
+    def test_get_diverse_judge_openai(self):
+        """Test diverse judge selection for OpenAI generator."""
+        from src.evaluation.frontier_client import JudgeModelSelector
+
+        provider, model = JudgeModelSelector.get_diverse_judge("gpt-4o")
+        assert provider == "anthropic"
+        assert "claude" in model.lower()
+
+    def test_get_diverse_judge_anthropic(self):
+        """Test diverse judge selection for Anthropic generator."""
+        from src.evaluation.frontier_client import JudgeModelSelector
+
+        provider, model = JudgeModelSelector.get_diverse_judge("claude-sonnet-4-20250514")
+        assert provider == "openai"
+        assert "gpt" in model.lower()
+
+    def test_get_diverse_judge_google(self):
+        """Test diverse judge selection for Google generator."""
+        from src.evaluation.frontier_client import JudgeModelSelector
+
+        provider, model = JudgeModelSelector.get_diverse_judge("gemini-1.5-pro")
+        assert provider == "openai"
+
+    def test_get_diverse_judge_unknown_fallback(self):
+        """Test fallback for unknown generator model."""
+        from src.evaluation.frontier_client import JudgeModelSelector
+
+        provider, model = JudgeModelSelector.get_diverse_judge("unknown-model")
+        assert provider == "openai"
+        assert model == "gpt-4o"
+
+    def test_is_same_model_exact_match(self):
+        """Test same model detection for exact match."""
+        from src.evaluation.frontier_client import JudgeModelSelector
+
+        assert JudgeModelSelector.is_same_model("gpt-4o", "gpt-4o")
+
+    def test_is_same_model_normalized_match(self):
+        """Test same model detection with normalization."""
+        from src.evaluation.frontier_client import JudgeModelSelector
+
+        assert JudgeModelSelector.is_same_model("GPT-4o", "gpt_4o")
+
+    def test_is_same_model_different(self):
+        """Test different models are not flagged as same."""
+        from src.evaluation.frontier_client import JudgeModelSelector
+
+        assert not JudgeModelSelector.is_same_model("gpt-4o", "claude-3-opus")
+
+    def test_validate_diversity_strict_raises(self):
+        """Test strict diversity validation raises on same model."""
+        from src.evaluation.frontier_client import JudgeModelSelector
+
+        with pytest.raises(ValueError, match="Circular evaluation bias"):
+            JudgeModelSelector.validate_diversity(
+                generator_model="gpt-4o",
+                judge_model="gpt-4o",
+                strict=True,
+            )
+
+    def test_validate_diversity_non_strict_warns(self):
+        """Test non-strict diversity validation only warns."""
+        from src.evaluation.frontier_client import JudgeModelSelector
+
+        # Should not raise, just return False
+        result = JudgeModelSelector.validate_diversity(
+            generator_model="gpt-4o",
+            judge_model="gpt-4o",
+            strict=False,
+        )
+        assert result is False
+
+
+class TestContextOverlapMetrics:
+    """Tests for context overlap computation."""
+
+    @pytest.fixture
+    def evaluator(self):
+        """Create evaluator for testing."""
+        return LLMEvaluator(embedding_model=None, verifier=None)
+
+    def test_context_overlap_full_match(self, evaluator):
+        """Test context overlap with full match."""
+        # Note: compute_context_overlap collects both doc_id and section_title
+        # So we need to include all identifiers in expected for full precision
+        retrieved = [
+            {"doc_id": "doc1", "section_title": "제1조"},
+            {"doc_id": "doc2", "section_title": "제2조"},
+        ]
+        expected = ["doc1", "doc2", "제1조", "제2조"]
+
+        recall, precision = evaluator.compute_context_overlap(retrieved, expected)
+
+        assert recall == 1.0
+        assert precision == 1.0
+
+    def test_context_overlap_partial_match(self, evaluator):
+        """Test context overlap with partial match."""
+        retrieved = [
+            {"doc_id": "doc1"},
+            {"doc_id": "doc2"},
+            {"doc_id": "doc3"},
+        ]
+        expected = ["doc1", "doc2", "doc4"]
+
+        recall, precision = evaluator.compute_context_overlap(retrieved, expected)
+
+        # 2 out of 3 expected found
+        assert recall == pytest.approx(2 / 3, rel=0.01)
+        # 2 out of 3 retrieved were expected
+        assert precision == pytest.approx(2 / 3, rel=0.01)
+
+    def test_context_overlap_no_match(self, evaluator):
+        """Test context overlap with no match."""
+        retrieved = [{"doc_id": "doc1"}]
+        expected = ["doc2", "doc3"]
+
+        recall, precision = evaluator.compute_context_overlap(retrieved, expected)
+
+        assert recall == 0.0
+        assert precision == 0.0
+
+    def test_context_overlap_empty_expected(self, evaluator):
+        """Test context overlap with empty expected sources."""
+        retrieved = [{"doc_id": "doc1"}]
+        expected: list[str] = []
+
+        recall, precision = evaluator.compute_context_overlap(retrieved, expected)
+
+        # No expected sources means perfect recall/precision by convention
+        assert recall == 1.0
+        assert precision == 1.0
+
+    def test_evaluate_with_expected_sources(self, evaluator):
+        """Test evaluate method includes context overlap metrics."""
+        context = [
+            {"doc_id": "source1", "content": "context content"},
+        ]
+        expected_sources = ["source1", "source2"]
+
+        metrics = evaluator.evaluate(
+            question="테스트",
+            expected_answer="답변",
+            generated_answer="답변",
+            context=context,
+            expected_sources=expected_sources,
+        )
+
+        # source1 was retrieved, source2 was not
+        assert metrics.context_recall == 0.5  # 1 out of 2 expected
+        assert metrics.context_precision == 1.0  # 1 out of 1 retrieved was expected
+
+
+class TestDatasetSchemaValidation:
+    """Tests for dataset schema validation."""
+
+    def test_validate_dataset_valid(self, tmp_path):
+        """Test validation passes for valid dataset."""
+        from src.evaluation.runner import EvaluationRunner
+
+        dataset = [
+            {
+                "id": "test_001",
+                "question": "유효한 질문?",
+                "expected_answer": "유효한 답변",
+                "category": "테스트",
+            },
+        ]
+
+        dataset_path = tmp_path / "valid_dataset.json"
+        with open(dataset_path, "w", encoding="utf-8") as f:
+            json.dump(dataset, f, ensure_ascii=False)
+
+        runner = EvaluationRunner(dataset_path=dataset_path)
+        loaded = runner.load_dataset(validate=True)
+
+        assert len(loaded) == 1
+        assert loaded[0]["question"] == "유효한 질문?"
+
+    def test_validate_dataset_invalid_empty_question(self, tmp_path):
+        """Test validation fails for empty question."""
+        from src.evaluation.runner import EvaluationRunner
+        from src.evaluation.schemas import PYDANTIC_AVAILABLE
+
+        dataset = [
+            {
+                "question": "",  # Empty - should fail
+                "expected_answer": "답변",
+            },
+        ]
+
+        dataset_path = tmp_path / "invalid_dataset.json"
+        with open(dataset_path, "w", encoding="utf-8") as f:
+            json.dump(dataset, f, ensure_ascii=False)
+
+        runner = EvaluationRunner(dataset_path=dataset_path)
+
+        if PYDANTIC_AVAILABLE:
+            with pytest.raises(ValueError, match="validation failed"):
+                runner.load_dataset(validate=True)
+        else:
+            # Without pydantic, validation is skipped
+            loaded = runner.load_dataset(validate=True)
+            assert len(loaded) == 1
+
+    def test_load_dataset_skip_validation(self, tmp_path):
+        """Test loading dataset without validation."""
+        from src.evaluation.runner import EvaluationRunner
+
+        # Invalid dataset but validation disabled
+        dataset = [
+            {"question": "", "expected_answer": ""},
+        ]
+
+        dataset_path = tmp_path / "skip_validation.json"
+        with open(dataset_path, "w", encoding="utf-8") as f:
+            json.dump(dataset, f, ensure_ascii=False)
+
+        runner = EvaluationRunner(dataset_path=dataset_path)
+        loaded = runner.load_dataset(validate=False)
+
+        assert len(loaded) == 1
+
+
+class TestNormalizedMetrics:
+    """Tests for normalized metric scales."""
+
+    def test_evaluation_result_normalized_scores(self, tmp_path):
+        """Test that EvaluationResult includes normalized LLM judge scores."""
+        from src.evaluation.runner import EvaluationRunner, _normalize_score
+
+        # Test normalization helper
+        assert _normalize_score(1.0) == 0.0  # Min score
+        assert _normalize_score(5.0) == 1.0  # Max score
+        assert _normalize_score(3.0) == 0.5  # Middle score
+
+        dataset = [
+            {
+                "question": "질문",
+                "expected_answer": "답변",
+                "category": "test",
+            },
+        ]
+
+        dataset_path = tmp_path / "test.json"
+        with open(dataset_path, "w", encoding="utf-8") as f:
+            json.dump(dataset, f, ensure_ascii=False)
+
+        runner = EvaluationRunner(dataset_path=dataset_path)
+        runner.load_dataset()
+        result = runner.run(model_name="test")
+
+        # Check normalized fields exist
+        result_dict = result.to_dict()
+        assert "mean_score_normalized" in result_dict["llm_judge"]
+        assert "mean_correctness_normalized" in result_dict["llm_judge"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

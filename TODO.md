@@ -21,22 +21,29 @@
 
 ### 🟡 High Priority
 
-- [ ] **4. Context Overlap 메트릭 활성화**: `compute_context_overlap` 정의되어 있으나 미사용
+- [x] **4. Context Overlap 메트릭 활성화**: `compute_context_overlap` 정의되어 있으나 미사용
   - 파일: `src/evaluation/evaluator.py:249-285`
   - 방안: EvaluationMetrics에 context_recall/precision 추가
+  - **완료**: context_recall, context_precision 필드 추가, evaluate()에서 expected_sources 지원
 
-- [ ] **5. Embedding Model 싱글톤화**: 각 Evaluator가 별도 모델 로드로 메모리 낭비
+- [x] **5. Embedding Model 싱글톤화**: 각 Evaluator가 별도 모델 로드로 메모리 낭비
   - 파일: `src/evaluation/evaluator.py:121-132`
+  - **완료**: `_get_embedding_model()` 싱글톤 패턴 도입
 
-- [ ] **6. Judge Model Diversity 기본값 강화**: strict_diversity=False가 기본, 같은 모델 평가 허용
+- [x] **6. Judge Model Diversity 기본값 강화**: strict_diversity=False가 기본, 같은 모델 평가 허용
   - 파일: `src/evaluation/llm_judge.py:432-440`
+  - **완료**: `strict_diversity=True`로 기본값 변경
 
 ### 🟢 Medium Priority
 
-- [ ] **7. 메트릭 스케일 표준화**: similarity/bleu는 0-1, llm_judge는 1-5로 혼재
-- [ ] **8. 테스트 커버리지 확대**: LLMJudge, FrontierClient 테스트 부재
-- [ ] **9. Dataset Schema Validation**: Pydantic 기반 검증 추가
-- [ ] **10. Faithfulness 명칭 명확화**: verifier vs judge 구분 개선
+- [x] **7. 메트릭 스케일 표준화**: similarity/bleu는 0-1, llm_judge는 1-5로 혼재
+  - **완료**: 정규화된 LLM Judge 메트릭 추가 (mean_llm_*_normalized, 0-1 스케일)
+- [x] **8. 테스트 커버리지 확대**: LLMJudge, FrontierClient 테스트 부재
+  - **완료**: 39개 테스트 (LLMJudgeComprehensive, JudgeModelSelector, ContextOverlapMetrics 등)
+- [x] **9. Dataset Schema Validation**: Pydantic 기반 검증 추가
+  - **완료**: `src/evaluation/schemas.py` 추가, EvaluationTestCase/EvaluationDataset 모델
+- [x] **10. Faithfulness 명칭 명확화**: verifier vs judge 구분 개선
+  - **완료**: verifier_faithfulness vs judge_context_faithfulness 명명 규칙 적용
 
 ---
 

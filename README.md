@@ -12,6 +12,7 @@ This project implements a robust Retrieval-Augmented Generation (RAG) pipeline d
 -   **Hallucination Verification**: LLM-based verification step to ensure answers are grounded in the retrieved context.
 -   **MCP Server Support**: Implements the [Model Context Protocol](https://modelcontextprotocol.io/) to integrate with Claude Desktop and other MCP clients.
 -   **Local LLM Ready**: Designed to work with local inference servers (vLLM, Ollama) via OpenAI-compatible APIs.
+-   **Robust Evaluation**: Integrated LLM-as-a-Judge framework with parallel execution and Korean-specific metrics.
 
 ## 🏗️ Architecture Overview
 

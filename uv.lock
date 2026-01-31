@@ -3523,6 +3523,7 @@ evaluation = [
     { name = "google-generativeai" },
     { name = "kiwipiepy" },
     { name = "openai" },
+    { name = "pydantic" },
 ]
 graph = [
     { name = "neo4j" },
@@ -3556,6 +3557,7 @@ requires-dist = [
     { name = "openai", marker = "extra == 'evaluation'", specifier = ">=1.0.0" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.0.0" },
     { name = "playwright", specifier = ">=1.40.0" },
+    { name = "pydantic", marker = "extra == 'evaluation'", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "pyyaml", specifier = ">=6.0" },

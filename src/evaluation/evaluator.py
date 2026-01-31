@@ -13,8 +13,39 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Korean tokenizer (lazy loaded)
+# Korean tokenizer (lazy loaded singleton)
 _kiwi_tokenizer = None
+
+# Embedding model (lazy loaded singleton)
+_embedding_model = None
+
+
+def _get_embedding_model(model_name: str = "intfloat/multilingual-e5-small"):
+    """Get or create the embedding model (singleton).
+
+    Uses sentence-transformers for semantic similarity.
+    Falls back to None if sentence-transformers is not installed.
+
+    Args:
+        model_name: Name of the embedding model to load
+
+    Returns:
+        SentenceTransformer instance or None
+    """
+    global _embedding_model
+    if _embedding_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            _embedding_model = SentenceTransformer(model_name)
+            logger.info(f"Loaded embedding model: {model_name}")
+        except ImportError:
+            logger.warning(
+                "sentence-transformers not available. "
+                "Install with: pip install sentence-transformers"
+            )
+            _embedding_model = False  # Mark as attempted but failed
+    return _embedding_model if _embedding_model else None
 
 
 def _get_korean_tokenizer():
@@ -57,6 +88,10 @@ class EvaluationMetrics:
     bleu_score: float = 0.0
     verifier_faithfulness: float = 0.0
 
+    # Context overlap metrics
+    context_recall: float = 0.0
+    context_precision: float = 0.0
+
     latency_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -91,6 +126,8 @@ class EvaluationMetrics:
             "answer_similarity": self.answer_similarity,
             "bleu_score": self.bleu_score,
             "verifier_faithfulness": self.verifier_faithfulness,
+            "context_recall": self.context_recall,
+            "context_precision": self.context_precision,
             "latency_ms": self.latency_ms,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
@@ -137,27 +174,12 @@ class LLMEvaluator:
         self.llm_judge = llm_judge
         self.use_llm_judge = use_llm_judge
 
-        # Lazy load embeddings if not provided
-        self._embeddings = None
-
     @property
     def embeddings(self):
-        """Lazy load embeddings model."""
+        """Get embeddings model (uses singleton if no custom model provided)."""
         if self.embedding_model is not None:
             return self.embedding_model
-
-        if self._embeddings is not None:
-            return self._embeddings
-
-        try:
-            from sentence_transformers import SentenceTransformer
-
-            self._embeddings = SentenceTransformer("intfloat/multilingual-e5-small")
-            logger.info("Loaded default embedding model for evaluation")
-            return self._embeddings
-        except ImportError:
-            logger.warning("sentence-transformers not available")
-            return None
+        return _get_embedding_model()
 
     def compute_similarity(self, text1: str, text2: str) -> float:
         """Compute cosine similarity between two texts using embeddings.
@@ -362,6 +384,7 @@ class LLMEvaluator:
         generated_answer: str,
         category: str = "",
         context: list[dict[str, Any]] | None = None,
+        expected_sources: list[str] | None = None,
         latency_ms: float = 0.0,
         input_tokens: int = 0,
         output_tokens: int = 0,
@@ -374,6 +397,7 @@ class LLMEvaluator:
             generated_answer: LLM-generated answer
             category: Question category
             context: Optional retrieval context
+            expected_sources: Optional list of expected source identifiers for context overlap
             latency_ms: Response latency in milliseconds
             input_tokens: Number of input tokens
             output_tokens: Number of output tokens
@@ -392,6 +416,13 @@ class LLMEvaluator:
             question, generated_answer, context
         )
 
+        # Compute context overlap if expected sources provided
+        context_recall, context_precision = 0.0, 0.0
+        if expected_sources and context:
+            context_recall, context_precision = self.compute_context_overlap(
+                context, expected_sources
+            )
+
         # Compute LLM-as-Judge metrics if enabled
         llm_scores = self._compute_llm_judge_scores(
             question, expected_answer, generated_answer, context
@@ -405,6 +436,8 @@ class LLMEvaluator:
             answer_similarity=similarity,
             bleu_score=bleu,
             verifier_faithfulness=faithfulness,
+            context_recall=context_recall,
+            context_precision=context_precision,
             latency_ms=latency_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,

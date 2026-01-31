@@ -569,7 +569,7 @@ def create_llm_judge(
     generator_model: str | None = None,
     generator_provider: str | None = None,
     auto_diverse: bool = False,
-    strict_diversity: bool = False,
+    strict_diversity: bool = True,
 ) -> LLMJudge:
     """Factory function to create an LLM judge.
 
@@ -581,7 +581,7 @@ def create_llm_judge(
         generator_model: Model used for golden answer generation (for diversity check)
         generator_provider: Provider of generator model (for diversity check)
         auto_diverse: Auto-select a different model from the generator
-        strict_diversity: Raise error if generator and judge are the same model
+        strict_diversity: Raise error if generator and judge are the same model (default: True)
 
     Returns:
         Configured LLMJudge

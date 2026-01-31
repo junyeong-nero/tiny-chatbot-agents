@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from .evaluator import EvaluationMetrics, LLMEvaluator
+from .schemas import validate_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,22 @@ def _safe_std(values: list) -> float:
     return float(np.std(values)) if values else 0.0
 
 
+def _normalize_score(score: float, min_val: float = 1.0, max_val: float = 5.0) -> float:
+    """Normalize a score from [min_val, max_val] to [0, 1] range.
+
+    Args:
+        score: Score to normalize
+        min_val: Minimum value of the original scale
+        max_val: Maximum value of the original scale
+
+    Returns:
+        Normalized score in [0, 1] range
+    """
+    if score <= 0:
+        return 0.0
+    return (score - min_val) / (max_val - min_val)
+
+
 @dataclass
 class EvaluationResult:
     """Aggregated evaluation results for a model."""
@@ -59,6 +76,8 @@ class EvaluationResult:
     mean_similarity: float = 0.0
     mean_bleu: float = 0.0
     mean_faithfulness: float = 0.0
+    mean_context_recall: float = 0.0
+    mean_context_precision: float = 0.0
     mean_latency_ms: float = 0.0
 
     # Statistics
@@ -70,13 +89,20 @@ class EvaluationResult:
     verified_count: int = 0
     verification_rate: float = 0.0
 
-    # LLM-as-Judge aggregated metrics
+    # LLM-as-Judge aggregated metrics (1-5 scale)
     mean_llm_judge_score: float = 0.0
     mean_llm_correctness: float = 0.0
     mean_llm_helpfulness: float = 0.0
     mean_llm_faithfulness: float = 0.0
     mean_llm_fluency: float = 0.0
     llm_judge_model: str = ""
+
+    # Normalized LLM-Judge metrics (0-1 scale for consistency with similarity/bleu)
+    mean_llm_judge_normalized: float = 0.0
+    mean_llm_correctness_normalized: float = 0.0
+    mean_llm_helpfulness_normalized: float = 0.0
+    mean_llm_faithfulness_normalized: float = 0.0
+    mean_llm_fluency_normalized: float = 0.0
 
     # Category breakdown
     category_scores: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -93,6 +119,8 @@ class EvaluationResult:
                 "mean_similarity": self.mean_similarity,
                 "mean_bleu": self.mean_bleu,
                 "mean_faithfulness": self.mean_faithfulness,
+                "mean_context_recall": self.mean_context_recall,
+                "mean_context_precision": self.mean_context_precision,
                 "mean_latency_ms": self.mean_latency_ms,
                 "std_similarity": self.std_similarity,
                 "std_bleu": self.std_bleu,
@@ -105,6 +133,12 @@ class EvaluationResult:
                 "mean_faithfulness": self.mean_llm_faithfulness,
                 "mean_fluency": self.mean_llm_fluency,
                 "judge_model": self.llm_judge_model,
+                # Normalized scores (0-1 scale)
+                "mean_score_normalized": self.mean_llm_judge_normalized,
+                "mean_correctness_normalized": self.mean_llm_correctness_normalized,
+                "mean_helpfulness_normalized": self.mean_llm_helpfulness_normalized,
+                "mean_faithfulness_normalized": self.mean_llm_faithfulness_normalized,
+                "mean_fluency_normalized": self.mean_llm_fluency_normalized,
             },
             "verification": {
                 "verified_count": self.verified_count,
@@ -216,21 +250,41 @@ class EvaluationRunner:
 
         return input_tokens_int, output_tokens_int
 
-    def load_dataset(self, path: str | Path | None = None) -> list[dict[str, Any]]:
+    def load_dataset(
+        self,
+        path: str | Path | None = None,
+        validate: bool = True,
+    ) -> list[dict[str, Any]]:
         """Load evaluation dataset from JSON file.
 
         Args:
             path: Path to dataset JSON (overrides init path)
+            validate: Whether to validate dataset schema (requires pydantic)
 
         Returns:
             List of test cases
+
+        Raises:
+            FileNotFoundError: If dataset file does not exist
+            ValueError: If validation is enabled and dataset has errors
         """
         dataset_path = Path(path) if path else self.dataset_path
         if not dataset_path or not dataset_path.exists():
             raise FileNotFoundError(f"Dataset not found: {dataset_path}")
 
         with open(dataset_path, encoding="utf-8") as f:
-            self.dataset = json.load(f)
+            raw_data = json.load(f)
+
+        if validate:
+            validated_data, errors = validate_dataset(raw_data)
+            if errors:
+                error_summary = "; ".join(errors[:5])  # Show first 5 errors
+                if len(errors) > 5:
+                    error_summary += f" (and {len(errors) - 5} more)"
+                raise ValueError(f"Dataset validation failed: {error_summary}")
+            self.dataset = validated_data
+        else:
+            self.dataset = raw_data
 
         logger.info(f"Loaded {len(self.dataset)} test cases from {dataset_path}")
         return self.dataset
@@ -250,6 +304,7 @@ class EvaluationRunner:
         question = test_case.get("question", "")
         expected = test_case.get("expected_answer", "")
         category = test_case.get("category", "")
+        expected_sources = test_case.get("expected_sources", [])
 
         # Generate answer using pipeline
         start_time = time.perf_counter()
@@ -290,6 +345,7 @@ class EvaluationRunner:
             generated_answer=generated,
             category=category,
             context=context,
+            expected_sources=expected_sources if expected_sources else None,
             latency_ms=latency_ms,
             input_tokens=input_tokens_int,
             output_tokens=output_tokens_int,
@@ -441,6 +497,8 @@ class EvaluationRunner:
         similarities = []
         bleus = []
         faiths = []
+        context_recalls = []
+        context_precisions = []
         latencies = []
         verified_count = 0
         category_scores: dict[str, list[dict[str, float]]] = {}
@@ -457,6 +515,10 @@ class EvaluationRunner:
             similarities.append(metrics.answer_similarity)
             bleus.append(metrics.bleu_score)
             faiths.append(metrics.faithfulness)
+            # Only include context metrics if they were computed (non-zero)
+            if metrics.context_recall > 0 or metrics.context_precision > 0:
+                context_recalls.append(metrics.context_recall)
+                context_precisions.append(metrics.context_precision)
             latencies.append(metrics.latency_ms)
 
             if metrics.verified:
@@ -510,19 +572,27 @@ class EvaluationRunner:
             mean_similarity=_safe_mean(similarities),
             mean_bleu=_safe_mean(bleus),
             mean_faithfulness=_safe_mean(faiths),
+            mean_context_recall=_safe_mean(context_recalls),
+            mean_context_precision=_safe_mean(context_precisions),
             mean_latency_ms=_safe_mean(latencies),
             std_similarity=_safe_std(similarities),
             std_bleu=_safe_std(bleus),
             std_latency_ms=_safe_std(latencies),
             verified_count=verified_count,
             verification_rate=verified_count / n if n > 0 else 0.0,
-            # LLM-judge aggregated metrics
+            # LLM-judge aggregated metrics (1-5 scale)
             mean_llm_judge_score=_safe_mean(llm_judge_scores),
             mean_llm_correctness=_safe_mean(llm_correctness_scores),
             mean_llm_helpfulness=_safe_mean(llm_helpfulness_scores),
             mean_llm_faithfulness=_safe_mean(llm_faithfulness_scores),
             mean_llm_fluency=_safe_mean(llm_fluency_scores),
             llm_judge_model=llm_judge_model,
+            # Normalized LLM-judge metrics (0-1 scale)
+            mean_llm_judge_normalized=_normalize_score(_safe_mean(llm_judge_scores)),
+            mean_llm_correctness_normalized=_normalize_score(_safe_mean(llm_correctness_scores)),
+            mean_llm_helpfulness_normalized=_normalize_score(_safe_mean(llm_helpfulness_scores)),
+            mean_llm_faithfulness_normalized=_normalize_score(_safe_mean(llm_faithfulness_scores)),
+            mean_llm_fluency_normalized=_normalize_score(_safe_mean(llm_fluency_scores)),
             category_scores=category_aggregated,
             case_results=case_results,
         )
