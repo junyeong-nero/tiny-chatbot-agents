@@ -1,0 +1,632 @@
+[
+    {
+        "id": "qa_001",
+        "question": "IMA는 원금 보장 상품 인가요?",
+        "expected_answer": "회사는 만기 시 IMA의 세전평가금액(보수 차감 후 기준)이 고객의 투자원금보다 적을 경우, 회사는 고객의 투자원금을 지급합니다.",
+        "category": "상품",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_002",
+        "question": "IMA는 중도해지가 가능한가요?",
+        "expected_answer": "IMA상품 유형에 따라 폐쇄형인 경우 중도해지가 불가능할 수 있습니다. 가입 시 상품유형을 반드시 확인해주세요.",
+        "category": "상품",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_003",
+        "question": "공모주 청약자격에 대해 알려주세요.",
+        "expected_answer": "공모주 청약자격은 일반(50%), 준우대(100%), 우대(200%), 최고우대(300%)가 있습니다. 고객우대서비스등급, 자산 및 거래요건 충족여부에 따라 1인당 청약한도를 차등 적용합니다.",
+        "category": "공모주",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_004",
+        "question": "금현물 거래는 어떻게 하나요?",
+        "expected_answer": "금현물 거래는 주식계좌(01)에 금현물 거래신청 후 이용이 가능합니다. 금현물 거래 신청 후에는 해지가 불가합니다.",
+        "category": "금현물",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_005",
+        "question": "계좌 비밀번호를 잊어버렸거나 5회 잘못 입력할경우 어떻게 하나요?",
+        "expected_answer": "한국투자앱 > 고객지원 > 계좌관리 > 계좌 비밀번호 관리에서 재설정 할 수 있습니다.",
+        "category": "계좌관리",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_006",
+        "question": "주식을 매매할 때 세금이 있나요?",
+        "expected_answer": "매도할 때 손익과 관계없이 총 판매금액의 0.2% 세금이 발생합니다.",
+        "category": "세금",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_007",
+        "question": "서비스 해지는 어떻게 할 수 있나요?",
+        "expected_answer": "서비스 해지는 네이버 간편주문 > 설정 > 해지하기에서 가능합니다. 한국투자 앱에서 해지 불가합니다.",
+        "category": "계좌관리",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_008",
+        "question": "미성년자도 신청이 가능한가요?",
+        "expected_answer": "국내 거주중인 만 14세 이상이며, 한국투자증권 간편주문 서비스 신청이 가능한 계좌가 있는 고객의 경우 신청이 가능합니다.",
+        "category": "계좌개설",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_009",
+        "question": "한국투자증권 주식계좌에 있는 돈은 예금자 보호를 받을 수 있나요?",
+        "expected_answer": "주식계좌 내 매수에 사용되지 않고 현금으로 남아 있는 경우에는 예금자보호법에 따라 원금과 소정의 이자를 합하여 1인당 5천만원까지 보호됩니다.",
+        "category": "예금자보호",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_010",
+        "question": "오늘 주식을 매도하면 언제 출금할 수 있나요?",
+        "expected_answer": "국내 주식은 영업일 기준 매도한 날 부터 2일 뒤 매도금액이 입금됩니다.",
+        "category": "국내주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_011",
+        "question": "시장가와 지정가의 차이는 뭔가요?",
+        "expected_answer": "지정가는 고객이 원하는 가격을 지정하여 주문하는 방법이고, 시장가는 시장에서 거래되는 가격으로 주문하는 방법입니다.",
+        "category": "국내주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_012",
+        "question": "내가 이미 낸 주문을 수정하거나 취소할 수 있나요?",
+        "expected_answer": "수정/취소 탭에서 가능합니다. 이미 체결된 주문은 수정/취소가 불가능합니다.",
+        "category": "국내주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_013",
+        "question": "매매 가능한 시간은 어떻게 되나요?",
+        "expected_answer": "KRX 09:00 ~ 15:30 (호가접수 08:30 ~ 15:30), NXT 08:00 ~ 20:00입니다.",
+        "category": "국내주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_014",
+        "question": "해외주식 배당금이 들어오지 않아요.",
+        "expected_answer": "해외주식 배당의 경우 국내 반영까지 통상적으로 약 1~3영업일 정도 더 소요됩니다.",
+        "category": "해외주식",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_015",
+        "question": "주식을 매수했는데 잔고에 표시되지 않아요.",
+        "expected_answer": "국내주식은 체결일 포함 3영업일에 결제가 완료됩니다. 체결기준잔고 화면을 이용하시기 바랍니다.",
+        "category": "국내주식",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_016",
+        "question": "해외주식거래 서비스를 해지하고 싶어요.",
+        "expected_answer": "해외주식거래 서비스 해지는 내점, 유선, HTS를 통해 가능합니다. 모바일 앱, 홈페이지에서는 미제공됩니다.",
+        "category": "해외주식",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_017",
+        "question": "한도제한계좌란 무엇인가요?",
+        "expected_answer": "한도제한계좌는 금융거래 목적 확인에 필요한 증빙서류가 확인되지 않아 1일 이체/인출한도가 제한된 계좌입니다.",
+        "category": "한도제한계좌",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_018",
+        "question": "미국 국채 만기 시 원리금은 언제 입금되나요?",
+        "expected_answer": "미국 국채 만기일은 현지 기준일로, 국내 송금까지는 1~3일 정도 시일이 더 소요됩니다.",
+        "category": "해외채권",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_019",
+        "question": "ISA계좌 만기자금 연금전환은 어떻게 하나요?",
+        "expected_answer": "ISA계좌의 만기일로부터 60일 이내에 연금저축계좌(22) 또는 개인형IRP(29)로 전환(납입) 가능합니다.",
+        "category": "ISA중개형",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_020",
+        "question": "제가 가지고 있는 계좌는 어떤 계좌인가요?",
+        "expected_answer": "계좌번호 끝자리로 구분합니다. 01은 위탁계좌, 03은 선물옵션계좌, 21은 수익증권계좌, 22는 연금저축계좌, 29는 개인형IRP계좌입니다.",
+        "category": "상품계좌",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_021",
+        "question": "IRP계좌를 개설했는데 입금이 되지 않습니다.",
+        "expected_answer": "IRP계좌는 개설 후 가입서류 검증 및 입금한도 설정이 완료되어야 정상이용이 가능합니다.",
+        "category": "퇴직연금",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_022",
+        "question": "연금저축계좌에 입금시 한도금액 초과로 뜹니다.",
+        "expected_answer": "연금저축계좌는 사전에 설정한 납입한도 내에서 입금 가능합니다. 연간 납입금액은 전 금융기관 통합한도(1,800만원)로 관리됩니다.",
+        "category": "개인연금",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_023",
+        "question": "연금저축계좌에서 ETF 매매를 하려면 어떻게 하나요?",
+        "expected_answer": "연금저축계좌(22)의 ETF 매매는 HTS 및 모바일 앱의 주식주문 화면에서 가능합니다. 단, 레버리지/인버스 ETF는 매매가 불가합니다.",
+        "category": "개인연금",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_024",
+        "question": "ISA중개형 계좌에 입금이 안됩니다.",
+        "expected_answer": "ISA중개형 계좌는 연간 납입한도가 2천만원으로 증액이 불가합니다.",
+        "category": "ISA중개형",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_025",
+        "question": "청약신청 방법을 알려주세요.",
+        "expected_answer": "온라인으로 홈페이지, HTS, 한국투자앱에서 청약 가능합니다. 오프라인은 준우대 이상 고객에 한해 접수 가능합니다.",
+        "category": "공모주",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_026",
+        "question": "청약신청 내역 및 결과는 어떻게 확인하나요?",
+        "expected_answer": "홈페이지, HTS, 한국투자앱에서 청약결과 조회가 가능합니다. 배정수량, 환불금 등은 알림톡으로 발송됩니다.",
+        "category": "공모주",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_027",
+        "question": "청약수수료는 어떻게 되나요?",
+        "expected_answer": "온라인 청약은 2,000원, 오프라인 청약은 프라임 3,000원, 패밀리 5,000원입니다. VIP/골드 등급은 무료입니다.",
+        "category": "공모주",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_028",
+        "question": "실명 미확인 계좌라고 뜨며 이체출금이 안됩니다.",
+        "expected_answer": "온라인 추가개설 계좌는 실명미확인 상태이므로 근거계좌로의 대체 출금만 가능합니다. 한국투자앱에서 비대면 실명확인을 진행하시기 바랍니다.",
+        "category": "이체/출금",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_029",
+        "question": "계좌번호를 찾고 싶어요.",
+        "expected_answer": "한국투자앱 로그인화면 하단 인증센터에서 계좌번호 조회가 가능합니다. 고객센터를 통해 확인도 가능합니다.",
+        "category": "계좌번호",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_030",
+        "question": "보안매체는 어떻게 발급받나요?",
+        "expected_answer": "보안매체 발급은 영업점에 내점하여 신청 가능합니다. 본인명의 휴대폰을 보유한 고객은 모바일 앱에서 모바일OTP 발급도 가능합니다.",
+        "category": "보안매체",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_031",
+        "question": "이체하려는데 한도가 없다고 나와요.",
+        "expected_answer": "약정계좌와 미약정계좌의 이체한도를 각각 확인하시고 필요시 증액해 주시기 바랍니다. 이체한도는 홈페이지 또는 앱에서 변경 가능합니다.",
+        "category": "입출금",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_032",
+        "question": "이체수수료 면제 방법을 알려주세요.",
+        "expected_answer": "고객우대서비스등급 골드/VIP이거나 퇴직연금(DC, DB, IRP) 가입 시 이체수수료가 면제됩니다.",
+        "category": "이체수수료",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_033",
+        "question": "국내주식 거래수수료를 알려주세요.",
+        "expected_answer": "국내주식 온라인 매매수수료는 계좌관리점(영업점/뱅키스)에 따라 적용됩니다. 자세한 사항은 수수료 안내 페이지에서 확인하세요.",
+        "category": "국내주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_034",
+        "question": "해외주식 거래수수료를 알려주세요.",
+        "expected_answer": "해외주식 온라인 주식거래 수수료는 영업점, 뱅키스 계좌 모두 동일하게 적용됩니다.",
+        "category": "해외주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_035",
+        "question": "고객우대서비스는 어떻게 정해지나요?",
+        "expected_answer": "고객우대서비스등급은 VIP, 골드, 프라임, 패밀리로 구분되며 직전 3개월간의 자산평잔, 수익, 거래기간 등을 점수화하여 분기별 산정합니다.",
+        "category": "고객우대서비스등급",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_036",
+        "question": "주식을 매도했는데 돈이 들어오지 않아요.",
+        "expected_answer": "국내주식 매도 시 매도대금은 체결일 포함 3영업일에 거래하신 주식 계좌로 입금됩니다.",
+        "category": "국내주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_037",
+        "question": "주문유형별로 각각 어떤 의미인지 알려주세요.",
+        "expected_answer": "지정가는 지정한 가격으로, 시장가는 시장 가격으로, 조건부지정가는 장마감 시 시장가로 전환되는 주문입니다.",
+        "category": "국내주식",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_038",
+        "question": "미수주문을 할 수 없도록 변경하고 싶어요.",
+        "expected_answer": "홈페이지, HTS, 한국투자앱에서 위탁증거금률 변경 메뉴를 통해 설정할 수 있습니다.",
+        "category": "국내주식",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_039",
+        "question": "미수금이 발생했는데 어떻게 해소하나요?",
+        "expected_answer": "미수금은 발생 당일 23:30까지 주식거래 계좌에 현금으로 입금하거나 보유종목을 매도하여 변제할 수 있습니다.",
+        "category": "국내주식",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_040",
+        "question": "미수동결계좌가 뭔가요?",
+        "expected_answer": "미수동결제도는 현금 미수금이 10만원을 초과하여 발생 당일까지 변제되지 않았을 때 30일간 미수 사용을 제한하는 제도입니다.",
+        "category": "국내주식",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_041",
+        "question": "해외주식 거래는 어떻게 하나요?",
+        "expected_answer": "주식계좌(01)에 해외증권거래 신청 후 환전을 진행하고 주문하시면 됩니다.",
+        "category": "해외주식",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_042",
+        "question": "미국주식 거래 시간을 알려주세요.",
+        "expected_answer": "해외주식 거래 시간은 시장상황에 따라 변동이 있을 수 있습니다. 홈페이지 또는 앱에서 확인하세요.",
+        "category": "해외주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_043",
+        "question": "미국주식을 매도했는데 돈이 들어오지 않아요.",
+        "expected_answer": "미국주식은 T+2영업일에 결제가 완료되며, 매도대금은 USD로 입금됩니다. 환전 후 원화로 출금 가능합니다.",
+        "category": "해외주식",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_044",
+        "question": "휴대폰번호 변경은 어떻게 하나요?",
+        "expected_answer": "휴대폰번호는 보안매체 보유 고객에 한해 홈페이지, HTS, 한국투자앱에서 변경이 가능합니다.",
+        "category": "개인정보변경",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_045",
+        "question": "주소 변경은 어떻게 하나요?",
+        "expected_answer": "홈페이지, HTS, 한국투자앱에서 개인정보 조회/변경 메뉴를 통해 변경 가능합니다.",
+        "category": "개인정보변경",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_046",
+        "question": "CMA 수익률은 어떻게 되나요?",
+        "expected_answer": "홈페이지 금융상품 > CMA > CMA 상품가이드에서 RP/MMF/발행어음 투자형 수익률 확인이 가능합니다.",
+        "category": "CMA",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_047",
+        "question": "CMA 유형을 변경하고 싶습니다.",
+        "expected_answer": "CMA 해지 후 재로그인하여 CMA 신청 순으로 진행하면 됩니다.",
+        "category": "CMA",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_048",
+        "question": "거래내역서가 필요합니다.",
+        "expected_answer": "거래내역서는 홈페이지 및 HTS에서 엑셀형식으로 출력이 가능합니다. 직인 날인 등 증빙처리가 필요한 경우 고객센터로 신청하세요.",
+        "category": "증명서",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_049",
+        "question": "잔고증명서는 어디서 발급받나요?",
+        "expected_answer": "홈페이지 고객서비스 > 증명서발급 > 잔고증명서 발급신청에서 가능합니다. 인터넷 즉시발급은 수수료 무료입니다.",
+        "category": "증명서",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_050",
+        "question": "계좌폐쇄 및 회원탈퇴 방법을 알려주세요.",
+        "expected_answer": "무잔고 상품계좌는 한국투자앱에서 직접 해지가 가능합니다. 회원탈퇴는 ID 해지(탈퇴) 메뉴를 통해 처리하세요.",
+        "category": "계좌해지",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_051",
+        "question": "IRP계좌 해지는 어떻게 하나요?",
+        "expected_answer": "IRP계좌 해지는 온라인(홈페이지/모바일), 관리점 유선, 영업점 내점을 통해 신청하실 수 있습니다.",
+        "category": "퇴직연금",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_052",
+        "question": "신규상장 종목의 매매는 어떻게 진행되나요?",
+        "expected_answer": "신규상장 종목은 단일가 8:30~9:00에 거래되며 가격제한폭은 공모가 대비 60~400%입니다. KRX에서만 거래 가능합니다.",
+        "category": "공모주",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_053",
+        "question": "조건부지정가는 지정가와 다른가요?",
+        "expected_answer": "조건부지정가는 지정가로 접수된 주문이 체결되지 않으면 장마감 단일가매매 시 시장가로 자동전환되는 주문입니다.",
+        "category": "국내주식",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_054",
+        "question": "배당금은 어떻게 확인할 수 있나요?",
+        "expected_answer": "HTS 권리현황조회 메뉴 또는 한국투자앱 권리·배당 내역에서 확인 가능합니다.",
+        "category": "국내주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_055",
+        "question": "해외주식 양도소득세 신고방법을 알려주세요.",
+        "expected_answer": "직전년도 해외주식 매도 순이익이 250만원 초과 시 당해년도 5월에 양도소득세를 신고해야 합니다. 세율은 22%입니다.",
+        "category": "해외주식",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_056",
+        "question": "ID비밀번호를 찾고 싶어요.",
+        "expected_answer": "홈페이지 또는 한국투자앱에서 고객ID 비밀번호 오류해제(재등록)를 통해 처리 가능합니다.",
+        "category": "시스템",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_057",
+        "question": "계좌비밀번호 5회 오류해제는 어떻게 하나요?",
+        "expected_answer": "홈페이지 또는 한국투자앱에서 계좌비밀번호 오류해제(재등록)를 통해 처리 가능합니다. 휴대폰 본인인증 필요합니다.",
+        "category": "시스템",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_058",
+        "question": "주문체결에 대한 알림메세지를 받고 싶어요.",
+        "expected_answer": "홈페이지, HTS, 한국투자앱에서 자산현황 및 거래알림 서비스를 신청하면 체결통보를 받을 수 있습니다.",
+        "category": "국내주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_059",
+        "question": "유상청약은 어떻게 신청하나요?",
+        "expected_answer": "홈페이지, HTS, 한국투자앱에서 유상청약 신청이 가능합니다. 고객센터 유선으로도 처리 가능합니다.",
+        "category": "국내주식",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_060",
+        "question": "글씨가 작아서 잘 안보이는데 수정 가능한가요?",
+        "expected_answer": "한국투자앱 메뉴 > 설정 > 화면 > 글자 크기/스타일에서 변경 가능합니다.",
+        "category": "스마트폰",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_061",
+        "question": "간편송금했는데 메시지를 못 받았어요.",
+        "expected_answer": "한국투자앱 이체 내역에서 보내기 취소 및 SMS/카카오톡 메세지 재발송이 가능합니다.",
+        "category": "이체/출금",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_062",
+        "question": "한도제한계좌를 해제하려면 어떤 서류를 제출해야 하나요?",
+        "expected_answer": "금융거래 목적 확인에 필요한 증빙서류(거래내역서, 재직증명서 등)를 영업점에 제출하면 해제 가능합니다.",
+        "category": "한도제한계좌",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_063",
+        "question": "이체한도 초과된다는데 잔여한도 확인은 어디서 하나요?",
+        "expected_answer": "한국투자앱 또는 홈페이지 이체한도 변경 메뉴에서 잔여한도 확인이 가능합니다.",
+        "category": "한도제한계좌",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_064",
+        "question": "온라인거래 신청 미완료, 이용가능한 계좌가 없다고 나와요.",
+        "expected_answer": "뱅키스 계좌는 온라인 약관 미동의로 일부 서비스가 제한될 수 있습니다. 은행-뱅키스 제휴 고객 이용 신청을 진행하세요.",
+        "category": "스마트폰",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_065",
+        "question": "한국투자증권이라며 투자권유를 받았어요.",
+        "expected_answer": "한국투자증권은 별도의 채팅방 등을 개설하여 투자권유 및 입금을 요구하지 않습니다. 피싱 사기를 주의하세요.",
+        "category": "금융사고예방",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_066",
+        "question": "ISA 중개형 만기연장은 어떻게 하나요?",
+        "expected_answer": "만기 3개월 전부터 만기일 전일까지 영업점, 유선, 한국투자앱에서 만기연장 신청이 가능합니다.",
+        "category": "ISA중개형",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_067",
+        "question": "총 자산현황에 최근 매매한 주식이 안나와요.",
+        "expected_answer": "총자산 화면은 결제기준 화면으로 최근 매매이력은 결제일 이후 반영됩니다. 체결기준잔고 화면을 이용하세요.",
+        "category": "스마트폰",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_068",
+        "question": "환불금 자동이체 계좌는 어떻게 등록하나요?",
+        "expected_answer": "홈페이지, HTS, 한국투자앱에서 환불금 이체계좌 등록이 가능합니다. 청약신청 과정에서 지정해야 합니다.",
+        "category": "공모주",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_069",
+        "question": "청약주식 이체 계좌는 어떻게 등록하나요?",
+        "expected_answer": "홈페이지, HTS에서 청약주식 이체계좌 등록이 가능합니다. 배정된 주식을 다른 계좌로 자동이체출고 하는 용도입니다.",
+        "category": "공모주",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_070",
+        "question": "저와 타인의 배정주식 수량이 왜 다른가요?",
+        "expected_answer": "공모주 배정은 균등배정과 비례배정으로 나뉘며, 소수점 수량은 추첨배정되어 타인과 수량이 다를 수 있습니다.",
+        "category": "공모주",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_071",
+        "question": "무료수수료로 알고 가입했는데 수수료가 발생합니다.",
+        "expected_answer": "평생 우대 혜택은 당사 수수료만 면제되며, 유관기관 수수료와 매도 시 세금은 정상 부과됩니다.",
+        "category": "매매수수료",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_072",
+        "question": "우편물을 받고 싶지 않습니다.",
+        "expected_answer": "홈페이지, HTS, 한국투자앱에서 통보지 변경 메뉴를 통해 온라인 조회 또는 이메일로 설정 가능합니다.",
+        "category": "개인정보변경",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_073",
+        "question": "통장사본 또는 가입증명서가 필요합니다.",
+        "expected_answer": "통장사본 대신 계좌확인서를 홈페이지에서 출력할 수 있습니다. 퇴직연금 가입증명서는 별도 메뉴에서 출력 가능합니다.",
+        "category": "증명서",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_074",
+        "question": "계좌에 신주인수권증서가 들어왔어요.",
+        "expected_answer": "신주인수권증서는 유상증자 권리를 의미하며, 상장 시 매도하거나 청약일에 유상청약 접수할 수 있습니다.",
+        "category": "국내주식",
+        "difficulty": "hard"
+    },
+    {
+        "id": "qa_075",
+        "question": "국내주식 실시간 잔고를 확인하고 싶어요.",
+        "expected_answer": "한국투자앱 주식 잔고·손익 화면에서 실시간 종목잔고 ON으로 변경하면 확인 가능합니다. KRX 거래소만 제공됩니다.",
+        "category": "스마트폰",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_076",
+        "question": "관심종목에 현재가가 반영되지 않아요.",
+        "expected_answer": "관심종목 조회구분을 '현재'로 설정하여 이용하시기 바랍니다. 예상과 단일은 다른 구분입니다.",
+        "category": "스마트폰",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_077",
+        "question": "반송해지는 어떻게 하나요?",
+        "expected_answer": "홈페이지, HTS, 한국투자앱에서 반송 해지 처리가 가능합니다. 고객센터 유선으로도 가능합니다.",
+        "category": "개인정보변경",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_078",
+        "question": "배당금 지급 통지서가 직장으로 옵니다.",
+        "expected_answer": "배당금 통지서는 기본 통보지로 발송됩니다. 홈페이지, 한국투자앱에서 기본통보지를 변경하세요.",
+        "category": "개인정보변경",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_079",
+        "question": "해외주식 배당금은 어떻게 확인할 수 있나요?",
+        "expected_answer": "HTS 계좌별권리배정내역 또는 한국투자앱 해외주식 권리·배당내역에서 확인 가능합니다.",
+        "category": "해외주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_080",
+        "question": "매입단가가 체결된 가격보다 높게 표시됩니다.",
+        "expected_answer": "매입단가는 조회 조건(비용 미포함/비용 포함/전일대비)에 따라 상이하게 표기됩니다. 보유잔고 하단에서 설정을 변경하세요.",
+        "category": "국내주식",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_081",
+        "question": "종목에 대한 공시와 뉴스는 어디서 확인하나요?",
+        "expected_answer": "홈페이지 주식 시세/투자정보 또는 한국투자앱 현재가 화면의 뉴스 탭에서 확인 가능합니다.",
+        "category": "국내주식",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_082",
+        "question": "주식을 매매할 때 수수료가 있나요?",
+        "expected_answer": "국내주식 코스피/코스닥 평생 우대수수료는 0.00363960%이며, 비적용 시 0.0140527%가 부과됩니다.",
+        "category": "수수료",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_083",
+        "question": "계좌개설 최초신규 이벤트 혜택받을 수 있는 방법을 알려주세요.",
+        "expected_answer": "한국투자앱에서 주식 추첨을 정상 신청한 경우에만 최초 계좌개설 혜택(국내주식 1주 지급)을 받을 수 있습니다.",
+        "category": "이벤트",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_084",
+        "question": "서비스 신청이 불가능한 계좌가 있습니다.",
+        "expected_answer": "계좌단위 사고 등록계좌, 미수가능계좌, 통합 증거금 신청 계좌 등은 서비스 신청이 불가합니다.",
+        "category": "계좌관리",
+        "difficulty": "medium"
+    },
+    {
+        "id": "qa_085",
+        "question": "네이버 국내주식 투자 서비스는 어떻게 신청할 수 있나요?",
+        "expected_answer": "한국투자증권 계좌가 있는 경우 한국투자증권 간편주문 > 설정 > 연결계좌 추가하기에서 최대 5계좌까지 선택 가능합니다.",
+        "category": "서비스신청",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_086",
+        "question": "미수, 신용, 대출 거래는 어떻게 하나요?",
+        "expected_answer": "한국투자증권 간편주문 서비스에서는 해당 거래를 제공하지 않습니다. 한국투자증권앱에서 신청하여 거래하세요.",
+        "category": "거래서비스",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_087",
+        "question": "매매 가능한 상품은 어떤 것이 있나요?",
+        "expected_answer": "국내주식(KOSPI, KOSDAQ), ETF(단, 레버리지/인버스 등 파생 ETF 제외)가 매매 가능합니다.",
+        "category": "거래서비스",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_088",
+        "question": "IMA는 수익률은 어떻게 되나요?",
+        "expected_answer": "IMA는 실적배당형 상품으로 고객님께 확정수익률을 지급하지 않습니다.",
+        "category": "상품",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_089",
+        "question": "삼성 인터넷 브라우저 화면 깨짐 현상 해소 방법",
+        "expected_answer": "삼성 인터넷 브라우저 설정 > 레이아웃 및 메뉴 > 스크롤 중 전체 메뉴바 표시를 ON으로 켜면 해소됩니다.",
+        "category": "스마트폰",
+        "difficulty": "easy"
+    },
+    {
+        "id": "qa_090",
+        "question": "환불 규정이 어떻게 되나요?",
+        "expected_answer": "환불 규정은 약관에 따라 다릅니다. 자세한 내용은 해당 약관의 조항을 확인해 주세요.",
+        "category": "약관",
+        "difficulty": "hard"
+    }
+]
