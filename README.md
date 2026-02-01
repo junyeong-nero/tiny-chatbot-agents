@@ -22,12 +22,12 @@ graph TD
     
     subgraph "Stage 1: QnA Retrieval"
         Pipeline --> QnASearch[Vector Search (QnA DB)]
-        QnASearch -- Score >= 0.85 --> QnAMatch[Found FAQ Match]
+        QnASearch -- Score >= 0.80 --> QnAMatch[Found FAQ Match]
         QnAMatch --> LLM[LLM Response Generation]
     end
     
     subgraph "Stage 2: ToS Retrieval (Fallback)"
-        QnASearch -- Score < 0.85 --> ToSSearch[Hybrid Search (ToS DB)]
+        QnASearch -- Score < 0.80 --> ToSSearch[Hybrid Search (ToS DB)]
         ToSSearch --> Vector[Vector Search]
         ToSSearch --> Keyword[Rule/Keyword Match]
         ToSSearch --> Reranker[Cross-Encoder Reranker]
