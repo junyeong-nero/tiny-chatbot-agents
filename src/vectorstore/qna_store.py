@@ -191,6 +191,9 @@ class QnAVectorStore:
             List of added IDs
         """
         all_ids = []
+        seen_ids: set[str] = set()
+        skipped_duplicates = 0
+        skipped_existing = 0
         total = len(qna_items)
 
         for i in range(0, total, batch_size):
@@ -210,9 +213,16 @@ class QnAVectorStore:
 
                 created_at = item.get("crawled_at") or datetime.now().isoformat()
 
-                # Generate ID
-                hash_input = f"{question}_{created_at}"
+                # Generate ID based on question + answer (not created_at to avoid duplicates)
+                hash_input = f"{question}_{answer[:200]}"
                 qna_id = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
+
+                # Skip duplicates within this batch
+                if qna_id in seen_ids:
+                    skipped_duplicates += 1
+                    continue
+
+                seen_ids.add(qna_id)
 
                 ids.append(qna_id)
                 documents.append(question)
@@ -236,16 +246,34 @@ class QnAVectorStore:
                 metadatas.append(metadata)
 
             if ids:
-                self.collection.add(
-                    ids=ids,
-                    documents=documents,
-                    metadatas=metadatas,
-                )
-                all_ids.extend(ids)
+                # Check for existing IDs in the collection
+                existing = self.collection.get(ids=ids)
+                existing_ids = set(existing["ids"])
+                skipped_existing += len(existing_ids)
+
+                # Filter out existing items
+                filtered = [
+                    (cid, doc, meta)
+                    for cid, doc, meta in zip(ids, documents, metadatas, strict=False)
+                    if cid not in existing_ids
+                ]
+
+                if filtered:
+                    filtered_ids, filtered_docs, filtered_metas = zip(*filtered, strict=False)
+                    self.collection.add(
+                        ids=list(filtered_ids),
+                        documents=list(filtered_docs),
+                        metadatas=list(filtered_metas),
+                    )
+                    all_ids.extend(filtered_ids)
 
             logger.info(f"Added batch {i // batch_size + 1}: {len(ids)} items")
 
         logger.info(f"Total added: {len(all_ids)} QnA entries")
+        if skipped_duplicates:
+            logger.warning(f"Skipped duplicate QnA IDs: {skipped_duplicates}")
+        if skipped_existing:
+            logger.warning(f"Skipped existing QnA IDs: {skipped_existing}")
         return all_ids
 
     def search(
@@ -282,6 +310,7 @@ class QnAVectorStore:
         )
 
         search_results = []
+        seen_content: set[str] = set()  # Deduplicate by question+answer
 
         if results["ids"] and results["ids"][0]:
             for i, qna_id in enumerate(results["ids"][0]):
@@ -295,11 +324,18 @@ class QnAVectorStore:
 
                 metadata = results["metadatas"][0][i] if results["metadatas"] else {}
                 question = results["documents"][0][i] if results["documents"] else ""
+                answer = str(metadata.get("answer", ""))
+
+                # Deduplicate by question + answer content
+                content_key = f"{question}_{answer[:200]}"
+                if content_key in seen_content:
+                    continue
+                seen_content.add(content_key)
 
                 search_results.append(
                     QnASearchResult(
                         question=question,
-                        answer=str(metadata.get("answer", "")),
+                        answer=answer,
                         category=str(metadata.get("category", "")),
                         sub_category=str(metadata.get("sub_category", "")),
                         source=str(metadata.get("source", "")),

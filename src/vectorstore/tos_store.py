@@ -366,6 +366,7 @@ class ToSVectorStore:
         )
 
         search_results = []
+        seen_content: set[str] = set()  # Deduplicate by document+section+content
 
         if results["ids"] and results["ids"][0]:
             for i, chunk_id in enumerate(results["ids"][0]):
@@ -376,12 +377,21 @@ class ToSVectorStore:
                     continue
 
                 metadata = results["metadatas"][0][i] if results["metadatas"] else {}
+                section_title = str(metadata.get("section_title", ""))
+                section_content = str(metadata.get("section_content", ""))
+                document_title = str(metadata.get("document_title", ""))
+
+                # Deduplicate by document + section + content
+                content_key = f"{document_title}_{section_title}_{section_content[:200]}"
+                if content_key in seen_content:
+                    continue
+                seen_content.add(content_key)
 
                 search_results.append(
                     ToSSearchResult(
-                        section_title=str(metadata.get("section_title", "")),
-                        section_content=str(metadata.get("section_content", "")),
-                        document_title=str(metadata.get("document_title", "")),
+                        section_title=section_title,
+                        section_content=section_content,
+                        document_title=document_title,
                         category=str(metadata.get("category", "")),
                         parent_content=str(metadata.get("parent_content", "")),
                         effective_date=str(metadata.get("effective_date", "")),
