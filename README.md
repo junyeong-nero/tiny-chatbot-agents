@@ -83,7 +83,25 @@ Configuration files are located in the `configs/` directory:
 You can run the pipeline interactively or via scripts.
 *(Check `main.py` or `scripts/run_pipeline.py` for entry points - custom implementation required based on specific needs)*
 
-### 2. Model Context Protocol (MCP) Server
+### 2. Web Interface (Streamlit)
+To interact with the chatbot via a web interface:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+This interface allows you to:
+- Chat with the RAG pipeline.
+- Search the QnA and ToS databases independently.
+- Configure LLM providers and verification settings dynamically.
+
+<p align="center">
+  <img src="assets/3.png" width="32%">
+  <img src="assets/4.png" width="32%">
+  <img src="assets/5.png" width="32%">
+</p>
+
+### 3. Model Context Protocol (MCP) Server
 To use this agent within Claude Desktop:
 
 1.  **Run the MCP Server:**
@@ -108,7 +126,7 @@ To use this agent within Claude Desktop:
     }
     ```
 
-### 3. Data Ingestion
+### 4. Data Ingestion
 Populate your vector databases with crawled data:
 
 ```bash
