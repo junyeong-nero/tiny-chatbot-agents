@@ -8,6 +8,7 @@ like vLLM, sglang, or ollama via LocalLLMClient.
 import logging
 import os
 
+import httpx
 from openai import OpenAI
 
 from .base import BaseLLMClient, LLMResponse
@@ -58,9 +59,12 @@ class OpenAIClient(BaseLLMClient):
                 "OpenAI API key required. Set OPENAI_API_KEY env var or pass api_key."
             )
 
+        # Use explicit httpx client to avoid proxy parameter conflicts
+        # in certain httpx/openai version combinations
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=base_url,
+            http_client=httpx.Client(),
         )
 
         logger.warning(

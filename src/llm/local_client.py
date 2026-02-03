@@ -16,6 +16,7 @@ Security Note:
 import logging
 import os
 
+import httpx
 from openai import OpenAI
 
 from .base import BaseLLMClient, LLMProvider, LLMResponse
@@ -105,9 +106,12 @@ class LocalLLMClient(BaseLLMClient):
         # but some setups might use one for authentication
         self.api_key = api_key or os.getenv(f"{provider.value.upper()}_API_KEY") or "not-required"
 
+        # Use explicit httpx client to avoid proxy parameter conflicts
+        # in certain httpx/openai version combinations
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
+            http_client=httpx.Client(),
         )
 
         logger.info(
