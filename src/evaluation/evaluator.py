@@ -127,6 +127,7 @@ class EvaluationMetrics:
     # Context overlap metrics
     context_recall: float = 0.0
     context_precision: float = 0.0
+    context_overlap_evaluated: bool = False
 
     latency_ms: float = 0.0
     input_tokens: int = 0
@@ -164,6 +165,7 @@ class EvaluationMetrics:
             "verifier_faithfulness": self.verifier_faithfulness,
             "context_recall": self.context_recall,
             "context_precision": self.context_precision,
+            "context_overlap_evaluated": self.context_overlap_evaluated,
             "latency_ms": self.latency_ms,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
@@ -453,10 +455,11 @@ class LLMEvaluator:
         )
 
         # Compute context overlap if expected sources provided
+        context_overlap_evaluated = expected_sources is not None
         context_recall, context_precision = 0.0, 0.0
-        if expected_sources and context:
+        if context_overlap_evaluated:
             context_recall, context_precision = self.compute_context_overlap(
-                context, expected_sources
+                context or [], expected_sources or []
             )
 
         # Compute LLM-as-Judge metrics if enabled
@@ -474,6 +477,7 @@ class LLMEvaluator:
             verifier_faithfulness=faithfulness,
             context_recall=context_recall,
             context_precision=context_precision,
+            context_overlap_evaluated=context_overlap_evaluated,
             latency_ms=latency_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,

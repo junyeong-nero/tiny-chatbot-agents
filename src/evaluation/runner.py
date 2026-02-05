@@ -95,6 +95,16 @@ def _normalize_score(score: float, min_val: float = 1.0, max_val: float = 5.0) -
     return (score - min_val) / (max_val - min_val)
 
 
+def _is_context_overlap_evaluated(metrics: EvaluationMetrics) -> bool:
+    """Return whether context overlap was computed for a test case."""
+    explicit_flag = getattr(metrics, "context_overlap_evaluated", None)
+    if isinstance(explicit_flag, bool):
+        return explicit_flag
+
+    # Backward compatibility for older serialized metrics without the flag.
+    return metrics.context_recall > 0 or metrics.context_precision > 0
+
+
 @dataclass
 class EvaluationResult:
     """Aggregated evaluation results for a model."""
@@ -578,8 +588,7 @@ class EvaluationRunner:
             similarities.append(metrics.answer_similarity)
             bleus.append(metrics.bleu_score)
             faiths.append(metrics.faithfulness)
-            # Only include context metrics if they were computed (non-zero)
-            if metrics.context_recall > 0 or metrics.context_precision > 0:
+            if _is_context_overlap_evaluated(metrics):
                 context_recalls.append(metrics.context_recall)
                 context_precisions.append(metrics.context_precision)
             latencies.append(metrics.latency_ms)

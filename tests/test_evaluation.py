@@ -642,5 +642,65 @@ class TestNormalizedMetrics:
         assert "mean_correctness_normalized" in result_dict["llm_judge"]
 
 
+class TestEvaluationAggregationAndReport:
+    """Tests for aggregation and report compatibility fixes."""
+
+    def test_context_overlap_zero_scores_are_aggregated(self):
+        """Context overlap averages should include evaluated zero-score cases."""
+        from src.evaluation.runner import EvaluationRunner
+
+        runner = EvaluationRunner(dataset_path=None)
+        all_metrics = [
+            EvaluationMetrics(
+                question="q1",
+                expected_answer="a1",
+                generated_answer="g1",
+                category="c1",
+                context_recall=0.0,
+                context_precision=0.0,
+                context_overlap_evaluated=True,
+            ),
+            EvaluationMetrics(
+                question="q2",
+                expected_answer="a2",
+                generated_answer="g2",
+                category="c1",
+                context_recall=1.0,
+                context_precision=1.0,
+                context_overlap_evaluated=True,
+            ),
+        ]
+
+        result = runner._aggregate_results(all_metrics, total_cases=2, model_name="test")
+        assert result.mean_context_recall == 0.5
+        assert result.mean_context_precision == 0.5
+
+    def test_csv_report_uses_verifier_faithfulness_field(self, tmp_path):
+        """CSV report should read verifier_faithfulness from case results."""
+        from src.evaluation.report import generate_csv_report
+        from src.evaluation.runner import EvaluationResult
+
+        result = EvaluationResult(
+            model_name="m1",
+            case_results=[
+                {
+                    "question": "질문",
+                    "category": "테스트",
+                    "answer_similarity": 0.9,
+                    "bleu_score": 0.8,
+                    "verifier_faithfulness": 0.7,
+                    "latency_ms": 12.3,
+                    "verified": True,
+                }
+            ],
+        )
+
+        csv_path = tmp_path / "report.csv"
+        generate_csv_report([result], csv_path)
+        content = csv_path.read_text(encoding="utf-8")
+
+        assert "0.7000" in content
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

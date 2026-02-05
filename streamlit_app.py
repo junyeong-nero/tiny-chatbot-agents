@@ -7,6 +7,8 @@ Usage:
 
 import os
 import sys
+import time
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import streamlit as st
@@ -231,6 +233,55 @@ def render_search_results(results: list[dict], search_type: str):
                 st.text(content)
 
 
+def load_evaluation_dataset(path: str) -> list[dict]:
+    """Load evaluation dataset from JSON file."""
+    import json
+
+    dataset_path = Path(path)
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {path}")
+
+    with open(dataset_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, list):
+        raise ValueError("evaluation dataset 형식이 올바르지 않습니다. (list 필요)")
+
+    cases = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        if not item.get("question") or not item.get("expected_answer"):
+            continue
+        cases.append(item)
+
+    return cases
+
+
+def compute_lightweight_eval(expected: str, generated: str) -> dict[str, float | bool]:
+    """Compute lightweight comparison metrics without heavy model dependencies."""
+    from src.evaluation.evaluator import LLMEvaluator
+
+    evaluator = LLMEvaluator(embedding_model=None, verifier=None)
+    bleu = evaluator.compute_bleu(expected, generated)
+    normalized_expected = expected.strip()
+    normalized_generated = generated.strip()
+
+    return {
+        "bleu": bleu,
+        "exact_match": normalized_expected == normalized_generated,
+        "string_similarity": SequenceMatcher(None, normalized_expected, normalized_generated).ratio(),
+    }
+
+
+def format_eval_case_label(case: dict) -> str:
+    """Format evaluation case label for selection UI."""
+    case_id = case.get("id", "no-id")
+    category = case.get("category", "uncategorized")
+    question = case.get("question", "")
+    return f"[{case_id}] ({category}) {question}"
+
+
 def main():
     st.set_page_config(
         page_title="RAG 챗봇",
@@ -246,15 +297,20 @@ def main():
         st.session_state.messages = []
     if "pipeline_loaded" not in st.session_state:
         st.session_state.pipeline_loaded = False
+    if "eval_dataset" not in st.session_state:
+        st.session_state.eval_dataset = []
+    if "eval_dataset_path" not in st.session_state:
+        st.session_state.eval_dataset_path = "data/evaluation/evaluation_dataset.json"
 
     # Render sidebar and get settings
     settings = render_sidebar()
 
     # Mode selection tabs
-    tab_chat, tab_qna_search, tab_tos_search = st.tabs([
+    tab_chat, tab_qna_search, tab_tos_search, tab_eval = st.tabs([
         "💬 채팅",
         "🔍 QnA 검색",
         "📜 약관 검색",
+        "🧪 Evaluation 테스트",
     ])
 
     # Load pipeline button in sidebar
@@ -393,6 +449,128 @@ def main():
                         render_search_results(results, "tos")
                 else:
                     st.warning("검색어를 입력하세요.")
+
+    # Evaluation tab
+    with tab_eval:
+        st.subheader("Evaluation Query 테스트")
+
+        dataset_path = st.text_input(
+            "Evaluation Dataset 경로",
+            value=st.session_state.eval_dataset_path,
+            help="question/expected_answer가 포함된 JSON list 파일",
+        )
+        st.session_state.eval_dataset_path = dataset_path
+
+        col_load, col_info = st.columns([1, 3])
+        with col_load:
+            if st.button("📥 Dataset 로드", key="eval_dataset_load_btn", use_container_width=True):
+                try:
+                    cases = load_evaluation_dataset(dataset_path)
+                    st.session_state.eval_dataset = cases
+                    st.success(f"{len(cases)}개 테스트 케이스 로드 완료")
+                except Exception as e:
+                    st.error(f"Dataset 로드 실패: {e}")
+                    st.session_state.eval_dataset = []
+        with col_info:
+            st.caption(f"현재 로드된 케이스 수: {len(st.session_state.eval_dataset)}")
+
+        if not st.session_state.pipeline_loaded:
+            st.info("👈 사이드바에서 파이프라인을 먼저 로드하세요.")
+        elif not st.session_state.eval_dataset:
+            st.info("먼저 Evaluation dataset을 로드하세요.")
+        else:
+            all_cases = st.session_state.eval_dataset
+            categories = sorted({c.get("category", "uncategorized") for c in all_cases})
+            selected_categories = st.multiselect(
+                "카테고리 필터",
+                options=categories,
+                default=categories,
+                key="eval_category_filter",
+            )
+
+            filtered_cases = [
+                c for c in all_cases if c.get("category", "uncategorized") in selected_categories
+            ]
+            st.caption(f"필터 결과: {len(filtered_cases)}개")
+
+            if not filtered_cases:
+                st.warning("필터 결과가 없습니다.")
+            else:
+                labels = [format_eval_case_label(c) for c in filtered_cases]
+                selected_idx = st.selectbox(
+                    "테스트할 질문 선택",
+                    options=list(range(len(filtered_cases))),
+                    format_func=lambda i: labels[i],
+                    key="eval_case_select",
+                )
+
+                selected_case = filtered_cases[selected_idx]
+
+                st.markdown("**Expected Answer**")
+                st.write(selected_case.get("expected_answer", ""))
+
+                col_run_one, col_run_batch = st.columns(2)
+                with col_run_one:
+                    run_one = st.button("▶️ 선택 질문 실행", key="eval_run_one_btn", use_container_width=True)
+                with col_run_batch:
+                    batch_size = st.number_input(
+                        "일괄 실행 수",
+                        min_value=1,
+                        max_value=min(20, len(filtered_cases)),
+                        value=min(5, len(filtered_cases)),
+                        key="eval_batch_size",
+                    )
+                    run_batch = st.button(
+                        "🚀 일괄 실행",
+                        key="eval_run_batch_btn",
+                        use_container_width=True,
+                    )
+
+                if run_one:
+                    with st.spinner("질문 실행 중..."):
+                        start = time.perf_counter()
+                        response = st.session_state.pipeline.query(selected_case["question"])
+                        latency_ms = (time.perf_counter() - start) * 1000
+                        metrics = compute_lightweight_eval(
+                            selected_case.get("expected_answer", ""),
+                            response.answer,
+                        )
+
+                    st.markdown("**Generated Answer**")
+                    st.write(response.answer)
+                    render_response_info(response)
+
+                    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                    col_m1.metric("BLEU", f"{metrics['bleu']:.3f}")
+                    col_m2.metric("문자열 유사도", f"{metrics['string_similarity']:.3f}")
+                    col_m3.metric("Exact Match", "Yes" if metrics["exact_match"] else "No")
+                    col_m4.metric("Latency", f"{latency_ms:.1f} ms")
+
+                if run_batch:
+                    with st.spinner("일괄 실행 중..."):
+                        rows = []
+                        for case in filtered_cases[:batch_size]:
+                            start = time.perf_counter()
+                            response = st.session_state.pipeline.query(case["question"])
+                            latency_ms = (time.perf_counter() - start) * 1000
+                            metrics = compute_lightweight_eval(
+                                case.get("expected_answer", ""),
+                                response.answer,
+                            )
+                            rows.append({
+                                "id": case.get("id", ""),
+                                "category": case.get("category", ""),
+                                "question": case.get("question", ""),
+                                "source": response.source.value,
+                                "confidence": round(response.confidence, 3),
+                                "bleu": round(metrics["bleu"], 3),
+                                "string_similarity": round(metrics["string_similarity"], 3),
+                                "exact_match": metrics["exact_match"],
+                                "latency_ms": round(latency_ms, 1),
+                            })
+
+                    st.success(f"{len(rows)}개 실행 완료")
+                    st.dataframe(rows, use_container_width=True)
 
 
 if __name__ == "__main__":

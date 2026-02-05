@@ -13,6 +13,15 @@ from typing import Any
 from .runner import EvaluationResult
 
 
+def _get_case_faithfulness(case: dict[str, Any]) -> float:
+    """Get faithfulness score from case data with backward compatibility."""
+    value = case.get("verifier_faithfulness", case.get("faithfulness", 0.0))
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def generate_markdown_report(
     results: list[EvaluationResult],
     output_path: str | Path | None = None,
@@ -137,7 +146,7 @@ def generate_csv_report(
                     "category": case.get("category", ""),
                     "similarity": f"{case.get('answer_similarity', 0):.4f}",
                     "bleu": f"{case.get('bleu_score', 0):.4f}",
-                    "faithfulness": f"{case.get('faithfulness', 0):.4f}",
+                    "faithfulness": f"{_get_case_faithfulness(case):.4f}",
                     "latency_ms": f"{case.get('latency_ms', 0):.1f}",
                     "verified": case.get("verified", False),
                 })
