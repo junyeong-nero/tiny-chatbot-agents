@@ -14,6 +14,18 @@ from pathlib import Path
 
 import streamlit as st
 
+_SOURCE_EMOJI = {
+    "qna": "📚",
+    "tos": "📜",
+    "no_context": "❓",
+}
+
+_SOURCE_LABEL = {
+    "qna": "QnA 데이터베이스",
+    "tos": "약관 데이터베이스",
+    "no_context": "컨텍스트 없음",
+}
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -139,18 +151,6 @@ def render_sidebar():
 
 def render_response_info(response):
     """Render response metadata in expandable section."""
-    source_emoji = {
-        "qna": "📚",
-        "tos": "📜",
-        "no_context": "❓",
-    }
-
-    source_label = {
-        "qna": "QnA 데이터베이스",
-        "tos": "약관 데이터베이스",
-        "no_context": "컨텍스트 없음",
-    }
-
     source_value = response.source.value
 
     col1, col2, col3 = st.columns(3)
@@ -158,7 +158,7 @@ def render_response_info(response):
     with col1:
         st.metric(
             label="출처",
-            value=f"{source_emoji.get(source_value, '📄')} {source_label.get(source_value, source_value)}",
+            value=f"{_SOURCE_EMOJI.get(source_value, '📄')} {_SOURCE_LABEL.get(source_value, source_value)}",
         )
 
     with col2:
@@ -259,11 +259,14 @@ def load_evaluation_dataset(path: str) -> list[dict]:
     return cases
 
 
-def compute_lightweight_eval(expected: str, generated: str) -> dict[str, float | bool]:
-    """Compute lightweight comparison metrics without heavy model dependencies."""
+@st.cache_resource
+def _get_lightweight_evaluator():
     from src.evaluation.evaluator import LLMEvaluator
+    return LLMEvaluator(embedding_model=None, verifier=None)
 
-    evaluator = LLMEvaluator(embedding_model=None, verifier=None)
+
+def compute_lightweight_eval(expected: str, generated: str) -> dict[str, float | bool]:
+    evaluator = _get_lightweight_evaluator()
     bleu = evaluator.compute_bleu(expected, generated)
     normalized_expected = expected.strip()
     normalized_generated = generated.strip()
