@@ -1,0 +1,123 @@
+{
+  "model_name": "default",
+  "total_cases": 3,
+  "evaluated_cases": 3,
+  "metrics": {
+    "mean_similarity": 1.0,
+    "mean_bleu": 1.0,
+    "mean_faithfulness": 1.0,
+    "mean_context_recall": 0.0,
+    "mean_context_precision": 0.0,
+    "mean_latency_ms": 0.00130536500364542,
+    "std_similarity": 0.0,
+    "std_bleu": 0.0,
+    "std_latency_ms": 0.001464340425337401
+  },
+  "llm_judge": {
+    "mean_score": 0.0,
+    "mean_correctness": 0.0,
+    "mean_helpfulness": 0.0,
+    "mean_faithfulness": 0.0,
+    "mean_fluency": 0.0,
+    "judge_model": "",
+    "mean_score_normalized": 0.0,
+    "mean_correctness_normalized": 0.0,
+    "mean_helpfulness_normalized": 0.0,
+    "mean_faithfulness_normalized": 0.0,
+    "mean_fluency_normalized": 0.0
+  },
+  "verification": {
+    "verified_count": 3,
+    "verification_rate": 1.0
+  },
+  "category_scores": {
+    "상품": {
+      "count": 2,
+      "mean_similarity": 1.0,
+      "mean_bleu": 1.0,
+      "mean_faithfulness": 1.0,
+      "mean_llm_judge": 0.0
+    },
+    "공모주": {
+      "count": 1,
+      "mean_similarity": 1.0,
+      "mean_bleu": 1.0,
+      "mean_faithfulness": 1.0,
+      "mean_llm_judge": 0.0
+    }
+  },
+  "case_results": [
+    {
+      "question": "IMA는 원금 보장 상품 인가요?",
+      "expected_answer": "회사는 만기 시 IMA의 세전평가금액(보수 차감 후 기준)이 고객의 투자원금보다 적을 경우, 회사는 고객의 투자원금을 지급합니다.",
+      "generated_answer": "회사는 만기 시 IMA의 세전평가금액(보수 차감 후 기준)이 고객의 투자원금보다 적을 경우, 회사는 고객의 투자원금을 지급합니다.",
+      "category": "상품",
+      "answer_similarity": 1.0,
+      "bleu_score": 1.0,
+      "verifier_faithfulness": 1.0,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "context_overlap_evaluated": false,
+      "latency_ms": 0.0003330642357468605,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "verified": true,
+      "verification_issues": [],
+      "llm_judge_score": 0.0,
+      "llm_judge_normalized": 0.0,
+      "llm_correctness": 0.0,
+      "llm_helpfulness": 0.0,
+      "judge_context_faithfulness": 0.0,
+      "llm_fluency": 0.0,
+      "llm_judge_summary": ""
+    },
+    {
+      "question": "IMA는 중도해지가 가능한가요?",
+      "expected_answer": "IMA상품 유형에 따라 폐쇄형인 경우 중도해지가 불가능할 수 있습니다. 가입 시 상품유형을 반드시 확인해주세요.",
+      "generated_answer": "IMA상품 유형에 따라 폐쇄형인 경우 중도해지가 불가능할 수 있습니다. 가입 시 상품유형을 반드시 확인해주세요.",
+      "category": "상품",
+      "answer_similarity": 1.0,
+      "bleu_score": 1.0,
+      "verifier_faithfulness": 1.0,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "context_overlap_evaluated": false,
+      "latency_ms": 0.003374996595084667,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "verified": true,
+      "verification_issues": [],
+      "llm_judge_score": 0.0,
+      "llm_judge_normalized": 0.0,
+      "llm_correctness": 0.0,
+      "llm_helpfulness": 0.0,
+      "judge_context_faithfulness": 0.0,
+      "llm_fluency": 0.0,
+      "llm_judge_summary": ""
+    },
+    {
+      "question": "공모주 청약자격에 대해 알려주세요.",
+      "expected_answer": "공모주 청약자격은 일반(50%), 준우대(100%), 우대(200%), 최고우대(300%)가 있습니다. 고객우대서비스등급, 자산 및 거래요건 충족여부에 따라 1인당 청약한도를 차등 적용합니다.",
+      "generated_answer": "공모주 청약자격은 일반(50%), 준우대(100%), 우대(200%), 최고우대(300%)가 있습니다. 고객우대서비스등급, 자산 및 거래요건 충족여부에 따라 1인당 청약한도를 차등 적용합니다.",
+      "category": "공모주",
+      "answer_similarity": 1.0,
+      "bleu_score": 1.0,
+      "verifier_faithfulness": 1.0,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "context_overlap_evaluated": false,
+      "latency_ms": 0.0002080341801047325,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "verified": true,
+      "verification_issues": [],
+      "llm_judge_score": 0.0,
+      "llm_judge_normalized": 0.0,
+      "llm_correctness": 0.0,
+      "llm_helpfulness": 0.0,
+      "judge_context_faithfulness": 0.0,
+      "llm_fluency": 0.0,
+      "llm_judge_summary": ""
+    }
+  ]
+}
