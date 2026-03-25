@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import logging
 import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -52,8 +53,6 @@ def _print_response(response) -> None:
 
 
 def _interactive_mode(pipeline) -> None:
-    from src.pipeline import RAGPipeline  # noqa: F401 (type hint only)
-
     print("\n" + "=" * 60)
     print("  RAG Pipeline - Interactive Mode")
     print("  Commands: /quit, /search-qna, /search-tos")
@@ -181,8 +180,9 @@ async def _crawl_tos(args: argparse.Namespace):
 async def _crawl_all(args: argparse.Namespace):
     qna_output = await _crawl_qna(args)
     print(f"QnA data saved to: {qna_output}")
-    args.output = "data/raw/tos"
-    tos_output = await _crawl_tos(args)
+    from src.crawlers import ToSCrawler
+    tos_crawler = ToSCrawler(output_dir="data/raw/tos", headless=not args.visible)
+    tos_output = await tos_crawler.run()
     print(f"ToS data saved to: {tos_output}")
 
 
@@ -313,14 +313,17 @@ def cmd_mcp(_args: argparse.Namespace) -> None:
 # ──────────────────────────────────────────────────────────────
 
 def cmd_streamlit(args: argparse.Namespace) -> None:
-    import subprocess
     app_path = project_root / "src" / "streamlit_app.py"
     cmd = ["streamlit", "run", str(app_path)]
     if args.port:
         cmd += ["--server.port", str(args.port)]
     if args.host:
         cmd += ["--server.address", args.host]
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError:
+        print("Error: streamlit not found. Install it with: uv pip install streamlit")
+        sys.exit(1)
 
 
 # ──────────────────────────────────────────────────────────────
