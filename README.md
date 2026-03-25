@@ -80,8 +80,18 @@ Configuration files are located in the `configs/` directory:
 ## 💻 Usage
 
 ### 1. Running the Pipeline (CLI)
-You can run the pipeline interactively or via scripts.
-*(Check `main.py` or `scripts/run_pipeline.py` for entry points - custom implementation required based on specific needs)*
+
+```bash
+# Interactive mode
+python main.py pipeline
+
+# Single query
+python main.py pipeline -q "계좌 해지 방법이 뭐야?"
+
+# Search QnA / ToS databases directly (no LLM needed)
+python main.py pipeline --search-qna "비밀번호"
+python main.py pipeline --search-tos "제1조"
+```
 
 ### 2. Web Interface (Streamlit)
 To interact with the chatbot via a web interface:
@@ -106,7 +116,7 @@ To use this agent within Claude Desktop:
 
 1.  **Run the MCP Server:**
     ```bash
-    python scripts/run_mcp_server.py
+    python main.py mcp
     ```
 
 2.  **Configure Claude Desktop:**
@@ -131,11 +141,12 @@ Populate your vector databases with crawled data:
 
 ```bash
 # Crawl data
-python scripts/crawl.py
+python main.py crawl qna
+python main.py crawl tos
 
 # Ingest into Vector DB
-python scripts/ingest_qna.py
-python scripts/ingest_tos.py
+python main.py ingest-qna
+python main.py ingest-tos
 ```
 
 ## 📁 Project Structure
@@ -145,7 +156,7 @@ tiny-chatbot-agents/
 ├── configs/              # Configuration files (Agent, Embeddings)
 ├── data/                 # Data storage (VectorDB, Raw JSONs)
 ├── docs/                 # Documentation
-├── scripts/              # Utility scripts (Crawling, Ingestion, MCP)
+├── main.py               # Unified CLI entry point
 ├── src/
 │   ├── crawlers/         # Playwright-based web crawlers
 │   ├── evaluation/       # LLM Judge evaluation framework
