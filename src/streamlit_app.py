@@ -2,7 +2,8 @@
 """Streamlit UI for RAG Pipeline.
 
 Usage:
-    streamlit run streamlit_app.py
+    python main.py streamlit
+    streamlit run src/streamlit_app.py
 """
 
 import os
@@ -14,7 +15,7 @@ from pathlib import Path
 import streamlit as st
 
 # Add project root to path
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 
