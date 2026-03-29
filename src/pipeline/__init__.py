@@ -1,5 +1,6 @@
 """RAG Pipeline modules."""
 
-from .rag_pipeline import RAGPipeline, PipelineResponse
+from .models import PipelineResponse, ResponseSource
+from .rag_pipeline import RAGPipeline
 
-__all__ = ["RAGPipeline", "PipelineResponse"]
+__all__ = ["RAGPipeline", "PipelineResponse", "ResponseSource"]

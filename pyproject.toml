@@ -12,6 +12,8 @@ dependencies = [
     "chromadb>=1.0.0",
     "sentence-transformers>=2.2.0",
     "torch>=2.0.0",
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
 ]
 
 [project.optional-dependencies]
