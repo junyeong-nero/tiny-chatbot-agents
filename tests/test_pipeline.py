@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.pipeline.rag_pipeline import RAGPipeline, PipelineResponse, ResponseSource
+from src.pipeline.rag_pipeline import PipelineResponse, RAGPipeline, ResponseSource
 
 
 class MockQnAResult:
@@ -122,8 +122,7 @@ class TestRAGPipeline:
         assert response.source == ResponseSource.QNA
         assert response.response_mode == "limited_answer"
 
-    def test_qna_mid_band_prefers_strong_tos(self, mock_qna_store, mock_tos_store, mock_llm):
-        """QnA mid band면 ToS가 더 강할 때 ToS 선택."""
+    def test_qna_mid_band_returns_limited_without_tos_fallback(self, mock_qna_store, mock_tos_store, mock_llm):
         mock_qna_store.search.return_value = [MockQnAResult("유사 질문", "유사 답변", 0.78)]
         mock_tos_store.search.return_value = [
             MockToSResult("이용약관", "제1조 (목적)", "본 약관은...", 0.90)
@@ -142,8 +141,8 @@ class TestRAGPipeline:
 
         response = pipeline.query("제1조에 대해 알려주세요")
 
-        assert response.source == ResponseSource.TOS
-        assert response.response_mode in {"answer", "limited_answer"}
+        assert response.source == ResponseSource.QNA
+        assert response.response_mode == "limited_answer"
 
     def test_tos_mid_band_returns_limited(self, mock_qna_store, mock_tos_store, mock_llm):
         """ToS score가 mid band면 제한 답변 반환."""
@@ -276,6 +275,20 @@ class TestRAGPipeline:
         assert len(results) == 2
         assert results[0]["question"] == "Q1"
 
+    def test_search_qna_direct_supports_top_k_alias(self, mock_qna_store, mock_tos_store, mock_llm):
+        mock_qna_store.search.return_value = [MockQnAResult("Q1", "A1", 0.9)]
+
+        pipeline = RAGPipeline(
+            llm=mock_llm,
+            qna_store=mock_qna_store,
+            tos_store=mock_tos_store,
+        )
+
+        results = pipeline.search_qna("test", top_k=1)
+
+        assert len(results) == 1
+        mock_qna_store.search.assert_called_with("test", n_results=1)
+
     def test_search_tos_direct(self, mock_qna_store, mock_tos_store, mock_llm):
         """Direct ToS search."""
         mock_tos_store.search.return_value = [
@@ -292,6 +305,20 @@ class TestRAGPipeline:
 
         assert len(results) == 1
         assert results[0]["section_title"] == "제1조"
+
+    def test_search_tos_direct_supports_top_k_alias(self, mock_qna_store, mock_tos_store, mock_llm):
+        mock_tos_store.search.return_value = [MockToSResult("약관A", "제1조", "내용1", 0.9)]
+
+        pipeline = RAGPipeline(
+            llm=mock_llm,
+            qna_store=mock_qna_store,
+            tos_store=mock_tos_store,
+        )
+
+        results = pipeline.search_tos("제1조", top_k=1)
+
+        assert len(results) == 1
+        mock_tos_store.search.assert_called_with("제1조", n_results=1)
 
     def test_tos_response_includes_verification(self, mock_qna_store, mock_tos_store, mock_llm):
         """ToS 응답에 verification 결과가 포함되는지 테스트."""
