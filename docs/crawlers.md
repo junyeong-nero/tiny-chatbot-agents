@@ -18,8 +18,22 @@ The project includes `playwright` based crawlers to fetch fresh data for the vec
 
 ## 🔄 Ingestion Pipeline
 
-1.  **Crawl**: Run `python scripts/crawl.py`. This saves raw JSONs to `data/raw/`.
-2.  **Process**: (Optional) `data/processed/` for intermediate cleaning.
+1.  **Crawl**: Use the unified CLI. This saves raw JSONs under `data/raw/`.
+    ```bash
+    python main.py crawl qna
+    python main.py crawl tos
+    python main.py crawl all
+    ```
+2.  **Process**: Optional cleanup can happen before ingestion if you maintain an intermediate dataset.
 3.  **Ingest**:
-    *   `scripts/ingest_qna.py`: Reads JSON -> Embeds -> ChromaDB (QnA).
-    *   `scripts/ingest_tos.py`: Reads JSON -> Chunks (by Article/Section) -> Embeds -> ChromaDB (ToS).
+    ```bash
+    python main.py ingest-qna
+    python main.py ingest-tos
+    ```
+4.  **Validate**: Both ingest commands support post-load search checks via `--search` and `--top-k`.
+
+### Useful Options
+
+*   `python main.py crawl qna --categories CARD,LOAN --visible`
+*   `python main.py ingest-qna --file data/raw/qna/example.json --clear --search "비밀번호"`
+*   `python main.py ingest-tos --file data/raw/tos/example.json --category 약관 --search "제1조"`

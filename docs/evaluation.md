@@ -2,7 +2,7 @@
 
 The `tiny-chatbot-agents` evaluation framework provides a robust system for measuring the performance of RAG (Retrieval-Augmented Generation) pipelines. It combines traditional NLP metrics with modern LLM-as-a-Judge techniques to provide a multi-faceted view of model quality, accuracy, and reliability.
 
-The framework is implemented in `src/evaluation/` and executed via `scripts/run_evaluation.py`.
+The framework is implemented in `src/evaluation/` and executed through the unified CLI in `main.py`.
 
 ## 1. Scope and Execution Flow
 
@@ -76,13 +76,13 @@ The evaluation runner expects a JSON file containing a list of test cases.
 ### Basic Usage
 Evaluate a specific model using the default dataset:
 ```bash
-python scripts/run_evaluation.py --models "llama3.1:8b"
+python main.py evaluate --models "llama3.1:8b"
 ```
 
 ### Advanced Options
 Evaluate multiple models in parallel with LLM-as-a-Judge enabled:
 ```bash
-python scripts/run_evaluation.py \
+python main.py evaluate \
   --models "llama3.1:8b,mistral:7b" \
   --dataset data/evaluation/my_test_set.json \
   --use-llm-judge \
@@ -94,8 +94,21 @@ python scripts/run_evaluation.py \
 ### Running Reference-to-Reference
 To evaluate the metrics themselves or compare reference answers without running the RAG pipeline:
 ```bash
-python scripts/run_evaluation.py --no-pipeline
+python main.py evaluate --no-pipeline
 ```
+
+### Current CLI Surface
+
+`python main.py evaluate` supports these top-level options:
+
+*   `--models`: comma-separated model names.
+*   `--dataset`: input evaluation dataset path.
+*   `--provider`: provider override for pipeline-backed runs.
+*   `--use-llm-judge`: enable frontier-model judging.
+*   `--judge-provider`, `--judge-model`: judge model selection.
+*   `--auto-diverse-judge`, `--strict-diversity`: reduce evaluator bias.
+*   `--parallel`, `--max-workers`: batch execution settings.
+*   `--report`: generate Markdown and CSV summaries in `results/`.
 
 ## 5. Model Diversity and Bias Prevention
 

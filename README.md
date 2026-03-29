@@ -2,11 +2,12 @@
 
 **Local LLM-based Customer Service Chatbot for Terms of Service (ToS) and QnA.**
 
-This project implements a robust Retrieval-Augmented Generation (RAG) pipeline designed to answer customer inquiries by first checking a QnA (FAQ) database and falling back to a detailed Terms of Service (ToS) document search if no matching FAQ is found. It features hybrid search, re-ranking, and hallucination verification to ensure high-quality answers.
+This project implements a Retrieval-Augmented Generation (RAG) pipeline for customer inquiries. The runtime is now organized as a LangGraph state machine: it searches QnA first, falls back to Terms of Service (ToS) retrieval when QnA confidence is low, and optionally verifies ToS-grounded answers before returning them.
 
 ## 🌟 Key Features
 
--   **Dual-Stage RAG Pipeline**: Prioritizes curated QnA matches before searching complex ToS documents.
+-   **Graph-Orchestrated RAG Pipeline**: Uses LangGraph to compose search, generation, verification, and response formatting nodes.
+-   **Dual-Stage Retrieval**: Prioritizes curated QnA matches before searching complex ToS documents.
 -   **Hybrid Search**: Combines Vector Search (Semantic) with Rule-based matching and Knowledge Graph triplets for high precision.
 -   **Advanced Ranking**: Uses **Bi-Encoder** (E5) for fast retrieval and **Cross-Encoder** (BGE-Reranker) for precise re-ranking.
 -   **Hallucination Verification**: LLM-based verification step to ensure answers are grounded in the retrieved context.
@@ -17,30 +18,33 @@ This project implements a robust Retrieval-Augmented Generation (RAG) pipeline d
 ## 🏗️ Architecture Overview
 
 ```mermaid
-graph TD
-    User[User Query] --> Pipeline[RAG Pipeline]
-    
-    subgraph "Stage 1: QnA Retrieval"
-        Pipeline --> QnASearch["Vector Search (QnA DB)"]
-        QnASearch -- "Score >= 0.80" --> QnAMatch[Found FAQ Match]
-        QnAMatch --> LLM[LLM Response Generation]
-    end
-    
-    subgraph "Stage 2: ToS Retrieval (Fallback)"
-        QnASearch -- "Score < 0.80" --> ToSSearch["Hybrid Search (ToS DB)"]
-        ToSSearch --> Vector[Vector Search]
-        ToSSearch --> Keyword[Rule/Keyword Match]
-        ToSSearch --> Reranker[Cross-Encoder Reranker]
-        Reranker --> ToSContext[Selected ToS Sections]
-        ToSContext --> LLM
-    end
-    
-    subgraph "Stage 3: Verification"
-        LLM --> Verifier[Hallucination Verifier]
-        Verifier -- Verified --> Final[Final Answer]
-        Verifier -- Issues Found --> Fallback[Uncertainty Response]
-    end
+flowchart TD
+    Start([User Query]) --> QnA["search_qna"]
+    QnA --> QnARouter{"QnA score"}
+    QnARouter -- ">= 0.80" --> QnAAnswer["generate_qna_answer"]
+    QnARouter -- "0.70 - 0.79" --> QnALimited["generate_qna_limited"]
+    QnARouter -- "< 0.70" --> ToS["search_tos"]
+
+    ToS --> ToSRouter{"ToS score"}
+    ToSRouter -- ">= 0.65" --> ToSAnswer["generate_tos_answer"]
+    ToSRouter -- "0.55 - 0.64" --> ToSLimited["generate_tos_limited"]
+    ToSRouter -- "0.40 - 0.54" --> Clarify["generate_clarification"]
+    ToSRouter -- "< 0.40" --> Handoff["generate_no_context"]
+
+    QnAAnswer --> Verify["verify_answer"]
+    QnALimited --> Verify
+    ToSAnswer --> Verify
+    ToSLimited --> Verify
+    Clarify --> Verify
+    Handoff --> Verify
+
+    Verify --> Format["format_response"]
+    Format --> End([Final Response])
 ```
+
+Notes:
+- QnA mid-band requests now return a limited FAQ-based answer directly; they no longer probe ToS for a stronger fallback.
+- Verification metadata is only attached for ToS `answer` and `limited_answer` responses when verification is enabled.
 
 ## 🚀 Getting Started
 
@@ -97,7 +101,9 @@ python main.py pipeline --search-tos "제1조"
 To interact with the chatbot via a web interface:
 
 ```bash
-streamlit run streamlit_app.py
+python main.py streamlit
+# or
+streamlit run src/streamlit_app.py
 ```
 
 This interface allows you to:
@@ -147,6 +153,9 @@ python main.py crawl tos
 # Ingest into Vector DB
 python main.py ingest-qna
 python main.py ingest-tos
+
+# Run evaluation
+python main.py evaluate --models "default" --report
 ```
 
 ## 📁 Project Structure
@@ -160,9 +169,10 @@ tiny-chatbot-agents/
 ├── src/
 │   ├── crawlers/         # Playwright-based web crawlers
 │   ├── evaluation/       # LLM Judge evaluation framework
+│   ├── graph/            # LangGraph nodes, routers, and graph state
 │   ├── llm/              # LLM Client wrappers
 │   ├── mcp/              # MCP Server implementation
-│   ├── pipeline/         # Core RAG Pipeline logic
+│   ├── pipeline/         # RAGPipeline facade + shared response models
 │   ├── tos_search/       # Hybrid search & Reranking logic
 │   ├── vectorstore/      # ChromaDB wrappers
 │   └── verifier/         # Hallucination verification logic
@@ -175,4 +185,5 @@ tiny-chatbot-agents/
 -   **Embeddings**: `intfloat/multilingual-e5-large` (Bi-Encoder)
 -   **Reranking**: `BAAI/bge-reranker-v2-m3` (Cross-Encoder)
 -   **LLM Interface**: OpenAI API compatible (vLLM/Ollama support)
+-   **Workflow Orchestration**: `langgraph`, `langchain-core`
 -   **MCP**: `fastmcp`

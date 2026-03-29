@@ -1,87 +1,94 @@
 # RAG Architecture
 
-The Request-Augmented Generation (RAG) pipeline is the core of this chatbot. It is designed to handle queries with varying levels of complexity, from simple FAQ lookups to complex interpretation of Terms of Service (ToS).
+The Retrieval-Augmented Generation (RAG) pipeline is the core of this chatbot. The current implementation keeps `RAGPipeline` as a thin facade and delegates orchestration to a LangGraph state machine under `src/graph/`.
+
+## Runtime Layout
+
+- `src/pipeline/rag_pipeline.py`: initializes stores, LLM, verifier, thresholds, and the compiled graph.
+- `src/pipeline/models.py`: shared `PipelineResponse` and `ResponseSource` types.
+- `src/graph/graph.py`: builds the state graph.
+- `src/graph/state.py`: defines `GraphState`.
+- `src/graph/nodes/*`: search, generation, verification, and formatting nodes.
+- `src/graph/edges/routers.py`: threshold-based routing functions.
 
 ## Pipeline Strategy: QnA First, ToS Second
-
-The pipeline (`src/pipeline/rag_pipeline.py`) follows a strict waterfall logic to ensure efficiency and accuracy.
 
 ### Flow Diagram
 
 ```mermaid
 flowchart TD
-    Start([User Query]) --> QnASearch[Search QnA DB]
+    Start([User Query]) --> SearchQnA["search_qna"]
 
-    QnASearch --> HasQnA{"QnA result exists?"}
-    HasQnA -- No --> ToSSearch["Search ToS DB (Vector or Optional Hybrid)"]
+    SearchQnA --> RouteQnA{"route_qna"}
+    RouteQnA -- ">= qna_threshold" --> QnAAnswer["generate_qna_answer"]
+    RouteQnA -- ">= qna_mid_threshold" --> QnALimited["generate_qna_limited"]
+    RouteQnA -- "else" --> SearchToS["search_tos"]
 
-    HasQnA -- Yes --> CheckQnA{"Best score >= 0.80?"}
-    CheckQnA -- Yes --> QnAAnswer[Generate QnA Answer]
-    QnAAnswer --> End([Final Response])
+    SearchToS --> RouteToS{"route_tos"}
+    RouteToS -- ">= tos_threshold" --> ToSAnswer["generate_tos_answer"]
+    RouteToS -- ">= tos_mid_threshold" --> ToSLimited["generate_tos_limited"]
+    RouteToS -- ">= tos_low_threshold" --> Clarify["generate_clarification"]
+    RouteToS -- "else" --> NoContext["generate_no_context"]
 
-    CheckQnA -- No --> CheckQnAMid{"Best score >= 0.70?"}
-    CheckQnAMid -- No --> ToSSearch
+    QnAAnswer --> Verify["verify_answer"]
+    QnALimited --> Verify
+    ToSAnswer --> Verify
+    ToSLimited --> Verify
+    Clarify --> Verify
+    NoContext --> Verify
 
-    CheckQnAMid -- Yes --> BuildQnALimited[Build QnA Limited Answer Candidate]
-    BuildQnALimited --> ToSSearchMid["Try ToS Search (Vector or Optional Hybrid)"]
-    ToSSearchMid --> Compare{"ToS returns answer/limited AND confidence >= QnA?"}
-    Compare -- Yes --> ToSSelect[Select ToS Response]
-    Compare -- No --> QnALimited[Return QnA Limited Answer]
-    QnALimited --> End
-
-    ToSSearch --> HasToS{"ToS result exists?"}
-    ToSSearchMid --> HasToS
-    HasToS -- No --> NoContext["Handoff (No Context)"]
-    HasToS -- Yes --> CheckToS{"Best score >= 0.65?"}
-
-    CheckToS -- Yes --> ToSAnswer[Generate ToS Answer]
-    CheckToS -- No --> CheckToSMid{"Best score >= 0.55?"}
-    CheckToSMid -- Yes --> ToSLimited[Generate ToS Limited Answer]
-    CheckToSMid -- No --> CheckToSLow{"Best score >= 0.40?"}
-    CheckToSLow -- Yes --> Clarify[Ask for Clarification]
-    CheckToSLow -- No --> NoContext
-
-    ToSSelect --> ToSVerify
-    ToSAnswer --> ToSVerify[Verify ToS Answer]
-    ToSLimited --> ToSVerify
-
-    ToSVerify --> End
-    Clarify --> End
-    NoContext --> End
+    Verify --> Format["format_response"]
+    Format --> End([PipelineResponse])
 ```
 
 ## Thresholds Configuration
 
-The pipeline behavior is controlled by confidence thresholds in `RAGPipeline` (default values below; they may be overridden at initialization):
+The pipeline behavior is controlled by confidence thresholds in `RAGPipeline`:
 
 | Threshold | Default | Description |
 | :--- | :--- | :--- |
-| `qna_threshold` | **0.80** | Minimum similarity score to accept a QnA match. High to prevent wrong FAQ answers. |
+| `qna_threshold` | **0.80** | Minimum similarity score to accept a QnA match. |
+| `qna_mid_threshold` | **0.70** | Mid-band for QnA. If the score is here, the graph returns a limited QnA answer directly. |
 | `tos_threshold` | **0.65** | Minimum score to consider a ToS section highly relevant. |
-| `qna_mid_threshold` | **0.70** | Mid-band for QnA. If score is here, we return limited QnA unless ToS is better. |
 | `tos_mid_threshold` | **0.55** | Mid-band for ToS. Used for limited-answer responses. |
 | `tos_low_threshold` | **0.40** | Low-band for ToS. Used to trigger clarification. |
 | `verification_threshold` | **0.70** | Minimum score used by the verifier when verification is enabled. |
 
-## 1. QnA Stage (High Precision)
-*   **Goal**: Instantly answer common questions.
-*   **Mechanism**: Dense Vector Search (Cosine Similarity).
-*   **Data Source**: `data/vectordb/qna` (ChromaDB).
-*   **Logic**:
-    *   **High Confidence (>= 0.80)**: Directly use the matched QnA to answer.
-    *   **Mid Confidence (0.70 - 0.79)**: Check ToS. If ToS has a better match, use ToS. Otherwise, provide a "Limited Answer" based on the QnA, explicitly stating uncertainty.
+## 1. QnA Stage
 
-## 2. ToS Stage (Deep Retrieval)
-*   **Goal**: Answer complex questions based on legal text.
-*   **Mechanism**: Vector Search by default, with optional Hybrid Search (Vector + Rule/Triplet) when enabled.
-*   **Fallback**: If QnA fails (or is in mid-band with lower confidence), the system queries the ToS database.
+*   **Goal**: Instantly answer common questions.
+*   **Mechanism**: Dense vector search over the QnA Chroma collection.
 *   **Logic**:
-    *   **High Confidence (>= 0.65)**: Use retrieved sections to generate a definitive answer.
-    *   **Mid Confidence (0.55 - 0.64)**: Generate a "Limited Answer" with a disclaimer about uncertainty.
-    *   **Low Confidence (0.40 - 0.54)**: Return a "Clarification" response, asking the user for more specific details.
-*   **Refinement**: In hybrid mode, additional scoring signals (rule/triplet and rerank-related scores) can be used.
+    *   **High Confidence (>= 0.80)**: route to `generate_qna_answer`.
+    *   **Mid Confidence (0.70 - 0.79)**: route to `generate_qna_limited`.
+    *   **Low Confidence (< 0.70)**: fall back to ToS search.
+
+The search node in `src/graph/nodes/search.py` normalizes QnA hits into dictionaries that include question, answer, category, sub-category, score, source, and source URL metadata.
+
+## 2. ToS Stage
+
+*   **Goal**: Answer complex questions grounded in policy and legal text.
+*   **Mechanism**: Vector search by default, with optional hybrid search when `enable_hybrid_tos_search=True`.
+*   **Fallback Rule**: ToS search only runs when QnA confidence is below `qna_mid_threshold`.
+*   **Logic**:
+    *   **High Confidence (>= 0.65)**: route to `generate_tos_answer`.
+    *   **Mid Confidence (0.55 - 0.64)**: route to `generate_tos_limited`.
+    *   **Low Confidence (0.40 - 0.54)**: route to `generate_clarification`.
+    *   **Very Low Confidence (< 0.40)**: route to `generate_no_context`.
+
+When hybrid search is enabled, the search node normalizes `final_score`, `combined_score`, rerank output, matched keywords, and matched triplets into state metadata. Explicit section references such as `제1조` are extracted from the query and stored in `state.section_reference`.
 
 ## 3. Verification Stage
+
 *   **Goal**: Prevent hallucinations.
 *   **Component**: `src/verifier/verifier.py`.
-*   **Process**: A separate LLM call compares the *Generated ToS Answer* against the *Retrieved ToS Context* to check factual consistency. (Current implementation verifies ToS responses; QnA responses are returned without verifier checks.)
+*   **Execution Rule**: The graph always visits `verify_answer`, but the node is a no-op unless verification is enabled and the response source is ToS with mode `answer` or `limited_answer`.
+*   **Outputs**: `verified`, `verification_score`, `verification_issues`, and `metadata["verification_reasoning"]`.
+
+QnA answers, clarifications, and handoff responses skip verifier execution.
+
+## 4. Public API Notes
+
+`RAGPipeline.query()` returns a `PipelineResponse` assembled from the final `GraphState`.
+
+`RAGPipeline.search_qna()` and `RAGPipeline.search_tos()` remain available as direct search helpers. Both now accept either `n_results` or the alias `top_k`.
